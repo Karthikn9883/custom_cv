@@ -1,66 +1,91 @@
-# create_database.py
+# backend/create_tables.py
 
 import sqlite3
 import os
 
 def create_tables():
-    # Ensure the database directory exists
-    db_dir = 'database'
-    os.makedirs(db_dir, exist_ok=True)
+    db_path = os.getenv('DB_PATH', 'database/smart_building.db')
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
-    # Connect to SQLite database (or create it if it doesn't exist)
-    db_path = os.path.join(db_dir, 'smart_building.db')
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # Create 'workers' table
+    # Create workers table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS workers (
             worker_id INTEGER PRIMARY KEY AUTOINCREMENT,
             worker_name TEXT NOT NULL,
-            worker_number TEXT UNIQUE NOT NULL,
-            worker_email TEXT UNIQUE NOT NULL,
+            worker_number TEXT NOT NULL,
+            worker_email TEXT NOT NULL UNIQUE,
             status TEXT NOT NULL DEFAULT 'free'
         );
     ''')
-    # Status column values: 'free' or 'occupied'
 
-    # Create 'tokens' table with foreign key referencing 'workers'
+    # Create tokens table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tokens (
             token_id INTEGER PRIMARY KEY AUTOINCREMENT,
             token_reason TEXT NOT NULL,
             token_location TEXT NOT NULL,
             token_assigned INTEGER,
-            token_status TEXT DEFAULT 'Pending',
-            token_start DATETIME DEFAULT CURRENT_TIMESTAMP,
-            token_end_time DATETIME,
+            token_status TEXT NOT NULL,
+            token_start TEXT NOT NULL,
+            token_end_time TEXT,
             confidence REAL,
             FOREIGN KEY (token_assigned) REFERENCES workers(worker_id)
         );
     ''')
 
-    # Insert workers into the 'workers' table
+    # Create cameras table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cameras (
+            camera_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            camera_name TEXT,
+            x_coordinate REAL,
+            y_coordinate REAL,
+            angle REAL,
+            room_no TEXT,
+            floor INTEGER
+        );
+    ''')
+
+    # Insert initial data into workers table
     workers = [
-        ('ARSHAD', '1234567890', 'karthikn9883@gmail.com'),
-        ('Pavan', '0987654321', 'karthik.nu9999@gmail.com'),
-        ('Karthik', '1122334455', 'karthik.nutulapati@gmail.com'),
+        ('Alice Johnson', '555-0101', 'alice@example.com'),
+        ('Bob Smith', '555-0102', 'bob@example.com'),
+        ('Charlie Davis', '555-0103', 'charlie@example.com'),
     ]
 
-    for worker_name, worker_number, worker_email in workers:
+    for worker in workers:
         try:
             cursor.execute('''
                 INSERT INTO workers (worker_name, worker_number, worker_email)
                 VALUES (?, ?, ?)
-            ''', (worker_name, worker_number, worker_email))
-            print(f"Inserted worker: {worker_name}")
-        except sqlite3.IntegrityError as e:
-            print(f"Error inserting worker {worker_name}: {e}")
+            ''', worker)
+        except sqlite3.IntegrityError:
+            # Worker already exists
+            pass
 
-    # Commit changes and close the connection
+    # Insert example cameras if needed
+    cameras = [
+        ('Entrance Camera', 100, 150, 0, 'Entrance Hall', 1),
+        ('Lobby Camera', 300, 200, 90, 'Lobby', 1),
+        ('Hallway Camera', 500, 250, 180, 'Main Hallway', 2),
+    ]
+
+    for camera in cameras:
+        try:
+            cursor.execute('''
+                INSERT INTO cameras (camera_name, x_coordinate, y_coordinate, angle, room_no, floor)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', camera)
+        except sqlite3.IntegrityError:
+            # Camera already exists
+            pass
+
     conn.commit()
     conn.close()
-    print("Tables 'workers' and 'tokens' created successfully, and workers added.")
+    print("Database tables created and initial data inserted.")
 
 if __name__ == "__main__":
     create_tables()

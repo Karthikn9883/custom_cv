@@ -13,6 +13,120 @@ import time
 import logging
 from dotenv import load_dotenv
 import contextlib
+from flask import Flask, Response, request, jsonify
+import threading
+from flask_cors import CORS
+
+
+# Flask application
+app = Flask(__name__)
+
+CORS(app)
+# Flask route for video feed
+@app.route('/video_feed')
+def video_feed():
+    def generate():
+        cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+        while True:
+            success, frame = cap.read()
+            if not success:
+                break
+            _, buffer = cv2.imencode('.jpg', frame)
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        cap.release()
+
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@app.route('/token_counts', methods=['GET'])
+def get_token_counts():
+    """
+    API endpoint to fetch the count of active and resolved tokens.
+    """
+    try:
+        conn, cursor = init_db()  # Reuse the existing init_db function
+
+        # Fetch count of active tokens (Pending status)
+        cursor.execute("SELECT COUNT(*) FROM tokens WHERE token_status = 'Pending'")
+        active_token_count = cursor.fetchone()[0]
+
+        # Fetch count of resolved tokens
+        cursor.execute("SELECT COUNT(*) FROM tokens WHERE token_status = 'Resolved'")
+        resolved_token_count = cursor.fetchone()[0]
+
+        conn.close()
+
+        # Return counts as a response
+        response = {
+            "active_tokens_count": active_token_count,
+            "resolved_tokens_count": resolved_token_count
+        }
+
+        return response, 200
+
+    except Exception as e:
+        logging.error(f"Error fetching token counts: {e}", exc_info=True)
+        return {"error": "Unable to fetch token counts"}, 500
+
+DB_PATH = os.getenv('DB_PATH', 'database/smart_building.db')
+
+def connect_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+@app.route('/cameras', methods=['GET'])
+def get_cameras():
+    try:
+        conn = connect_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM cameras")
+        rows = cursor.fetchall()
+        cameras = [dict(row) for row in rows]
+        return jsonify(cameras), 200
+    except Exception as e:
+        return {"error": str(e)}, 500
+    finally:
+        conn.close()
+
+@app.route('/cameras', methods=['POST'])
+def save_cameras():
+    try:
+        cameras = request.json  # Expecting a list of cameras
+        conn = connect_db()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM cameras")  # Clear existing data before saving
+        for camera in cameras:
+            cursor.execute('''
+                INSERT INTO cameras (camera_id, camera_name, x_coordinate, y_coordinate, angle, room_no, floor)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                camera['camera_id'],
+                camera.get('camera_name', f'Camera {camera["camera_id"]}'),
+                camera['x_coordinate'],
+                camera['y_coordinate'],
+                camera['angle'],
+                camera.get('room_no', 'Unknown'),
+                camera.get('floor', 0)
+            ))
+        conn.commit()
+        return {"message": "Cameras saved successfully."}, 200
+    except Exception as e:
+        return {"error": str(e)}, 500
+    finally:
+        conn.close()
+
+        
+# Function to run Flask app
+def run_flask():
+    app.run(host='0.0.0.0', port=5001, debug=False)
+
+# At the end of the initialization, start the Flask thread
+flask_thread = threading.Thread(target=run_flask)
+flask_thread.daemon = True
+flask_thread.start()
+
 
 # Load environment variables for sensitive data
 load_dotenv()
@@ -47,7 +161,7 @@ except Exception as e:
 frame_queue = Queue(maxsize=10)  # Adjust size based on memory constraints
 
 # RTSP URL for the DVR camera stream (update as needed)
-rtsp_url = "rtsp://smart:1234@192.168.1.207:554/avstream/channel=7/stream=0.sdp"
+rtsp_url = "rtsp://smart:1234@192.168.1.207:554/avstream/channel=7/stream=1.sdp"
 
 # Initialize a lock for database operations (optional)
 db_lock = threading.Lock()
