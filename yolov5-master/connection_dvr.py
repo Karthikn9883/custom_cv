@@ -117,7 +117,113 @@ def save_cameras():
     finally:
         conn.close()
 
-        
+@app.route('/workers', methods=['GET'])
+def get_workers():
+    """
+    Fetch all workers from the database.
+    """
+    try:
+        conn = connect_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM workers")
+        rows = cursor.fetchall()
+        workers = [dict(row) for row in rows]
+        return jsonify(workers), 200
+    except Exception as e:
+        logging.error(f"Error fetching workers: {e}", exc_info=True)
+        return {"error": str(e)}, 500
+    finally:
+        conn.close()
+
+@app.route('/workers', methods=['POST'])
+def add_worker():
+    """
+    Add a new worker to the database.
+    """
+    try:
+        data = request.json
+        conn = connect_db()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO workers (worker_name, worker_number, worker_email, status)
+            VALUES (?, ?, ?, ?)
+        ''', (data['name'], data['number'], data['email'], 'free'))
+        conn.commit()
+        return {"message": "Worker added successfully."}, 201
+    except Exception as e:
+        logging.error(f"Error adding worker: {e}", exc_info=True)
+        return {"error": str(e)}, 500
+    finally:
+        conn.close()
+
+@app.route('/workers/<int:worker_id>', methods=['PUT'])
+def update_worker(worker_id):
+    """
+    Update a worker's status or details.
+    """
+    try:
+        data = request.json
+        conn = connect_db()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE workers
+            SET worker_name = ?, worker_number = ?, worker_email = ?, status = ?
+            WHERE worker_id = ?
+        ''', (data['name'], data['number'], data['email'], data['status'], worker_id))
+        conn.commit()
+        return {"message": "Worker updated successfully."}, 200
+    except Exception as e:
+        logging.error(f"Error updating worker: {e}", exc_info=True)
+        return {"error": str(e)}, 500
+    finally:
+        conn.close()
+
+@app.route('/workers/<int:worker_id>', methods=['DELETE'])
+def delete_worker(worker_id):
+    """
+    Delete a worker from the database.
+    """
+    try:
+        conn = connect_db()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM workers WHERE worker_id = ?", (worker_id,))
+        conn.commit()
+        return {"message": "Worker deleted successfully."}, 200
+    except Exception as e:
+        logging.error(f"Error deleting worker: {e}", exc_info=True)
+        return {"error": str(e)}, 500
+    finally:
+        conn.close()
+    
+def assign_worker(conn, cursor):
+    try:
+        # Select the least-recently-assigned free worker
+        cursor.execute('''
+            SELECT worker_id, worker_email 
+            FROM workers
+            WHERE status = 'free'
+            ORDER BY last_assigned ASC NULLS FIRST
+            LIMIT 1;
+        ''')
+        result = cursor.fetchone()
+        if result:
+            worker_id, worker_email = result
+            # Update worker status and set last_assigned time
+            cursor.execute('''
+                UPDATE workers
+                SET status = 'occupied', last_assigned = CURRENT_TIMESTAMP
+                WHERE worker_id = ?;
+            ''', (worker_id,))
+            conn.commit()
+            logging.info(f"Assigned Worker ID: {worker_id}, Email: {worker_email}")
+            return worker_id, worker_email
+        else:
+            logging.warning("No free workers available for assignment.")
+            return None, None
+    except Exception as e:
+        logging.error(f"Error during worker assignment: {e}", exc_info=True)
+        return None, None
+
 # Function to run Flask app
 def run_flask():
     app.run(host='0.0.0.0', port=5001, debug=False)
