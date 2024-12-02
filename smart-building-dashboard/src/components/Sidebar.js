@@ -1,5 +1,3 @@
-// frontend/src/components/Sidebar.js
-
 import React from "react";
 import { Button, Stack } from "@mui/material";
 
@@ -21,10 +19,18 @@ const Sidebar = ({ setActiveSection, handleLogout }) => {
         >
           Manage Cams
         </Button>
-        <Button variant="contained" color="primary">
+        <Button
+          variant="contained"
+          color="primary"
+          onClick={() => setActiveSection("manageWorkers")}
+        >
           Manage Workers
         </Button>
-        <Button variant="contained" color="primary">
+        <Button
+          variant="contained"
+          color="primary"
+          onClick={() => setActiveSection("settings")}
+        >
           Settings
         </Button>
         <Button variant="contained" color="secondary" onClick={handleLogout}>

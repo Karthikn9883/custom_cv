@@ -6,15 +6,14 @@ import PowerConsumption from "./components/PowerConsumption";
 import WeatherUpdates from "./components/WeatherUpdates";
 import Tokens from "./components/Tokens";
 import RoomLayout from "./components/RoomLayout";
+import ManageWorkers from "./components/ManageWorkers"; // Import ManageWorkers
 import { Grid } from "@mui/material";
 
 function App() {
-  // Define activeSection state to manage which section is displayed
   const [activeSection, setActiveSection] = useState("dashboard");
 
   return (
     <div style={{ display: "flex" }}>
-      {/* Pass setActiveSection as a prop to Sidebar */}
       <Sidebar setActiveSection={setActiveSection} />
       <div style={{ flex: 1, padding: "20px" }}>
         <Header />
@@ -39,6 +38,13 @@ function App() {
           <Grid container spacing={2} style={{ marginTop: "20px" }}>
             <Grid item xs={12}>
               <RoomLayout />
+            </Grid>
+          </Grid>
+        )}
+        {activeSection === "manageWorkers" && (
+          <Grid container spacing={2} style={{ marginTop: "20px" }}>
+            <Grid item xs={12}>
+              <ManageWorkers />
             </Grid>
           </Grid>
         )}
