@@ -29,10 +29,10 @@ load_dotenv()
 # Database path
 DB_PATH = os.getenv('DB_PATH', 'database/smart_building.db')
 
-# Set up logging
+# Set up logging with enhanced details
 logging.basicConfig(
     filename='connection_dvr.log',
-    level=logging.INFO,  # Change to DEBUG for more verbose logs
+    level=logging.DEBUG,  # Changed to DEBUG for more verbose logs
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
@@ -45,9 +45,14 @@ def connect_db():
     Creates a new database connection (with row dict factory).
     Each thread should call this to get its own connection.
     """
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row  # Enable dictionary-like row access
-    return conn
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        conn.row_factory = sqlite3.Row  # Enable dictionary-like row access
+        logging.debug("Database connection established.")
+        return conn
+    except sqlite3.Error as e:
+        logging.error(f"Failed to connect to database: {e}")
+        raise e
 
 def init_db():
     """
@@ -56,11 +61,11 @@ def init_db():
     try:
         conn = connect_db()
         cursor = conn.cursor()
-        logging.info("Database connected successfully.")
+        logging.debug("Database cursor initialized.")
         return conn, cursor
     except sqlite3.Error as e:
-        logging.error(f"Failed to connect to database: {e}")
-        exit(1)
+        logging.error(f"Failed to initialize DB: {e}")
+        raise e
 
 ###############################################################################
 #                              Flask Endpoints                                #
@@ -81,6 +86,7 @@ def video_feed(camera_id):
 
     rtsp_url = camera_streams.get(camera_id)
     if not rtsp_url:
+        logging.warning(f"Camera ID {camera_id} not found.")
         return f"Camera ID {camera_id} not found.", 404
 
     def generate():
@@ -123,6 +129,7 @@ def get_token_counts():
         resolved = cursor.fetchone()[0]
 
         conn.close()
+        logging.debug(f"Token counts fetched: Pending={pending}, Resolved={resolved}")
         return {"pending": pending, "resolved": resolved}, 200
     except Exception as e:
         logging.error(f"Error in /token_counts: {e}", exc_info=True)
@@ -143,6 +150,7 @@ def get_cameras():
         cursor.execute("SELECT * FROM cameras")
         rows = cursor.fetchall()
         cameras = [dict(row) for row in rows]
+        logging.debug(f"Fetched {len(cameras)} cameras from the database.")
         return jsonify(cameras), 200
     except Exception as e:
         logging.error(f"Error fetching cameras: {e}", exc_info=True)
@@ -160,6 +168,8 @@ def save_cameras():
         conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM cameras")  # Clear existing data
+        logging.debug("Existing cameras deleted from the database.")
+
         for c in cameras:
             cursor.execute("""
                 INSERT INTO cameras (camera_name, x_coordinate, y_coordinate, angle, room_no, floor)
@@ -173,6 +183,7 @@ def save_cameras():
                 c.get('floor', 0)
             ))
         conn.commit()
+        logging.info(f"Saved {len(cameras)} cameras to the database.")
         return {"message": "Cameras saved successfully"}, 200
     except Exception as e:
         logging.error(f"Error saving cameras: {e}", exc_info=True)
@@ -191,6 +202,7 @@ def get_workers():
         cursor.execute("SELECT * FROM workers")
         rows = cursor.fetchall()
         workers = [dict(row) for row in rows]
+        logging.debug(f"Fetched {len(workers)} workers from the database.")
         return jsonify(workers), 200
     except Exception as e:
         logging.error(f"Error fetching workers: {e}", exc_info=True)
@@ -212,7 +224,9 @@ def add_worker():
             VALUES (?, ?, ?)
         """, (data['name'], data['number'], data['email']))
         conn.commit()
-        return {"message": "Worker added successfully."}, 201
+        worker_id = cursor.lastrowid
+        logging.info(f"Added new worker: ID={worker_id}, Email={data['email']}.")
+        return {"message": "Worker added successfully.", "worker_id": worker_id}, 201
     except sqlite3.IntegrityError as ie:
         logging.error(f"Integrity Error adding worker: {ie}", exc_info=True)
         return {"error": "Worker with this email already exists."}, 400
@@ -238,7 +252,9 @@ def update_worker(worker_id):
         """, (data['name'], data['number'], data['email'], data['status'], worker_id))
         conn.commit()
         if cursor.rowcount == 0:
+            logging.warning(f"Worker ID {worker_id} not found for update.")
             return {"error": "Worker not found."}, 404
+        logging.info(f"Worker ID {worker_id} updated successfully.")
         return {"message": "Worker updated successfully."}, 200
     except sqlite3.IntegrityError as ie:
         logging.error(f"Integrity Error updating worker: {ie}", exc_info=True)
@@ -260,7 +276,9 @@ def delete_worker(worker_id):
         cursor.execute("DELETE FROM workers WHERE worker_id=?", (worker_id,))
         conn.commit()
         if cursor.rowcount == 0:
+            logging.warning(f"Worker ID {worker_id} not found for deletion.")
             return {"error": "Worker not found."}, 404
+        logging.info(f"Worker ID {worker_id} deleted successfully.")
         return {"message": "Worker deleted successfully."}, 200
     except Exception as e:
         logging.error(f"Error deleting worker: {e}", exc_info=True)
@@ -296,7 +314,7 @@ def assign_worker(conn, cursor):
             logging.info(f"Assigned worker {worker_id} ({worker_email}).")
             return worker_id, worker_email
         else:
-            logging.warning("No free workers available.")
+            logging.warning("No free workers available for assignment.")
             return None, None
     except Exception as e:
         logging.error(f"Error in assign_worker: {e}", exc_info=True)
@@ -315,10 +333,11 @@ def release_worker(conn, cursor, worker_id):
         updated = cursor.rowcount
         conn.commit()
         if updated:
-            logging.info(f"Released worker {worker_id}.")
+            logging.info(f"Released worker {worker_id} and marked as 'free'.")
+            return True
         else:
             logging.warning(f"Attempted to release worker {worker_id}, but no rows were updated.")
-        return updated > 0
+            return False
     except Exception as e:
         logging.error(f"Error in release_worker: {e}", exc_info=True)
         return False
@@ -358,7 +377,7 @@ def update_token_status(conn, cursor, token_id, status='Resolved'):
         rows_updated = cursor.rowcount
         conn.commit()
         if rows_updated:
-            logging.info(f"Token {token_id} updated to '{status}'.")
+            logging.info(f"Token {token_id} updated to '{status}' with end_time={end_time}.")
             return True
         else:
             logging.warning(f"Token {token_id} not found for updating.")
@@ -402,7 +421,7 @@ Details:
             server.ehlo()
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.sendmail(FROM_EMAIL, [TO_EMAIL], msg.as_string())
-            logging.info(f"Email notification sent to {TO_EMAIL} for {item} at {timestamp} status='{status}'.")
+            logging.info(f"Email notification sent to {TO_EMAIL} for {item} at {timestamp} with status='{status}'.")
     except Exception as e:
         logging.error(f"Failed to send email: {e}", exc_info=True)
 
@@ -489,7 +508,11 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
     process_every_n_frames = 1  # Process every frame for real-time detection
 
     # Initialize DB connection for this thread
-    conn, cursor = init_db()
+    try:
+        conn, cursor = init_db()
+    except Exception as e:
+        logging.critical(f"Failed to initialize DB for thread handling {rtsp_url}: {e}")
+        return
 
     while reconnect_attempts <= max_reconnect_attempts:
         cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
@@ -568,7 +591,7 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
                 if detection_state[item]:
                     total_time_detected = (current_time - detection_start_time[item]).total_seconds()
                     if total_time_detected >= detection_duration_threshold and assigned_token[item] is None:
-                        logging.info(f"[{rtsp_url}] '{item}' >= {detection_duration_threshold}s, raising token.")
+                        logging.info(f"[{rtsp_url}] '{item}' detected continuously for {detection_duration_threshold}s. Raising token.")
                         worker_id, worker_email = assign_worker(conn, cursor)
                         if worker_id and worker_email:
                             ts_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -585,6 +608,7 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
                                 )
                                 if token_id:
                                     assigned_token[item] = token_id
+                                    logging.debug(f"[{rtsp_url}] Assigned token ID {token_id} to worker ID {worker_id}.")
                                     if should_send_notification(item, rtsp_url):
                                         notification_queue.put((
                                             worker_email,
@@ -599,7 +623,7 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
                             else:
                                 logging.warning(f"[{rtsp_url}] '{item}' not detected during token assignment.")
                         else:
-                            logging.warning(f"[{rtsp_url}] No free workers to assign for '{item}' detection.")
+                            logging.warning(f"[{rtsp_url}] No free workers available to assign for '{item}' detection.")
 
                 # Check for token resolution
                 if assigned_token[item] is not None and not detection_state[item]:
@@ -608,7 +632,7 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
                         absent_time = (current_time - detection_stop_time[item]).total_seconds()
                         if absent_time >= resolution_gap_threshold:
                             token_id = assigned_token[item]
-                            logging.info(f"[{rtsp_url}] '{item}' absent for {resolution_gap_threshold}s, resolving token {token_id}.")
+                            logging.info(f"[{rtsp_url}] '{item}' absent for {resolution_gap_threshold}s. Resolving token ID {token_id}.")
                             updated = update_token_status(conn, cursor, token_id, 'Resolved')
                             if updated:
                                 # Retrieve assigned worker ID from token
@@ -630,12 +654,16 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
                                                 rtsp_url,
                                                 'Resolved'
                                             ))
+                                    else:
+                                        logging.warning(f"[{rtsp_url}] Worker email not found for worker ID {assigned_worker_id}.")
                                     # Release the worker
                                     released = release_worker(conn, cursor, assigned_worker_id)
-                                    if not released:
-                                        logging.warning(f"[{rtsp_url}] Failed to release worker {assigned_worker_id}.")
+                                    if released:
+                                        logging.debug(f"[{rtsp_url}] Worker ID {assigned_worker_id} released successfully.")
+                                    else:
+                                        logging.warning(f"[{rtsp_url}] Failed to release worker ID {assigned_worker_id}.")
                                 else:
-                                    logging.warning(f"[{rtsp_url}] Token {token_id} has no assigned worker.")
+                                    logging.warning(f"[{rtsp_url}] Token ID {token_id} has no assigned worker.")
                                 # Reset detection and token state
                                 assigned_token[item] = None
                                 detection_state[item] = False
@@ -643,7 +671,7 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
                                 last_detection_time[item] = None
                                 detection_stop_time[item] = None
                             else:
-                                logging.warning(f"[{rtsp_url}] Failed to update token {token_id} to 'Resolved'.")
+                                logging.warning(f"[{rtsp_url}] Failed to update token ID {token_id} to 'Resolved'.")
 
             # Put the annotated frame into the queue for display
             if not frame_queue.full():
@@ -656,6 +684,7 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
 
     # Close DB connection
     conn.close()
+    logging.debug(f"[{rtsp_url}] Database connection closed.")
 
 ###############################################################################
 #                     Spawning Threads & Main Display Loop                    #
@@ -670,11 +699,13 @@ def run_flask():
 # Start Flask thread
 flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
+logging.info("Flask server started on port 5001.")
 
 # Create a notification queue for asynchronous email alerts
 notification_queue = Queue()
 notification_thread = threading.Thread(target=notification_worker, args=(notification_queue,), daemon=True)
 notification_thread.start()
+logging.info("Notification worker thread started.")
 
 # List of cameras/RTSP URLs for processing
 camera_urls = [
@@ -696,23 +727,28 @@ for url in camera_urls:
     )
     detection_threads[url] = t
     t.start()
+    logging.info(f"Detection thread started for camera: {url}")
 
 def cleanup():
     """
     Graceful shutdown: stops threads, cleans up queues.
     """
+    logging.info("Initiating cleanup process.")
     # Signal the notification worker to stop
     notification_queue.put("STOP")
     notification_queue.join()
+    logging.info("Notification worker signaled to stop.")
 
     # Join detection threads
-    for t in detection_threads.values():
+    for url, t in detection_threads.items():
         t.join(timeout=5)
+        logging.debug(f"Detection thread for {url} joined.")
 
     # Join notification thread
     notification_thread.join(timeout=5)
+    logging.debug("Notification worker thread joined.")
     cv2.destroyAllWindows()
-    logging.info("Shutdown complete.")
+    logging.info("Cleanup complete.")
 
 try:
     while True:
