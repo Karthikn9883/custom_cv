@@ -1,3 +1,5 @@
+// src/App.js
+
 import React, { useState } from "react";
 import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
@@ -8,6 +10,8 @@ import Tokens from "./components/Tokens";
 import RoomLayout from "./components/RoomLayout";
 import ManageWorkers from "./components/ManageWorkers"; // Import ManageWorkers
 import { Grid } from "@mui/material";
+import { ToastContainer } from "react-toastify"; // Import ToastContainer
+import "react-toastify/dist/ReactToastify.css"; // Import Toastify CSS
 
 function App() {
   const [activeSection, setActiveSection] = useState("dashboard");
@@ -25,6 +29,7 @@ function App() {
             <Grid item xs={4}>
               <WeatherUpdates />
             </Grid>
+            {/* Pass "active" and "resolved" as the type prop */}
             <Grid item xs={4}>
               <Tokens title="Active Tokens" type="active" />
             </Grid>
@@ -48,6 +53,8 @@ function App() {
             </Grid>
           </Grid>
         )}
+        {/* Place ToastContainer once at the root of your app */}
+        <ToastContainer />
       </div>
     </div>
   );

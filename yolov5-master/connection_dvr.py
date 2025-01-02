@@ -14,70 +14,129 @@ import logging
 from dotenv import load_dotenv
 import contextlib
 from flask import Flask, Response, request, jsonify
-import threading
 from flask_cors import CORS
 
+###############################################################################
+#                             Flask & Configuration                           #
+###############################################################################
 
-# Flask application
 app = Flask(__name__)
-
 CORS(app)
-# Flask route for video feed
-@app.route('/video_feed')
-def video_feed():
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Database path
+DB_PATH = os.getenv('DB_PATH', 'database/smart_building.db')
+
+# Set up logging
+logging.basicConfig(
+    filename='connection_dvr.log',
+    level=logging.INFO,  # Change to DEBUG for more verbose logs
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+###############################################################################
+#                          Utility / DB Connection                            #
+###############################################################################
+
+def connect_db():
+    """
+    Creates a new database connection (with row dict factory).
+    Each thread should call this to get its own connection.
+    """
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row  # Enable dictionary-like row access
+    return conn
+
+def init_db():
+    """
+    Initialize or connect to the DB and return (conn, cursor).
+    """
+    try:
+        conn = connect_db()
+        cursor = conn.cursor()
+        logging.info("Database connected successfully.")
+        return conn, cursor
+    except sqlite3.Error as e:
+        logging.error(f"Failed to connect to database: {e}")
+        exit(1)
+
+###############################################################################
+#                              Flask Endpoints                                #
+###############################################################################
+
+@app.route('/video_feed/<int:camera_id>')
+def video_feed(camera_id):
+    """
+    Returns an MJPEG stream for a specific camera.
+    (Raw from the camera, no YOLO overlay.)
+    """
+    # Define camera streams (you can fetch from DB if preferred)
+    camera_streams = {
+        1: "rtsp://admin:admin123@192.168.29.194:554/Streaming/Channels/202?rtsp_transport=tcp",
+        2: "rtsp://admin:admin123@192.168.29.194:554/Streaming/Channels/302?rtsp_transport=tcp",
+        3: "rtsp://admin:admin123@192.168.29.194:554/Streaming/Channels/402?rtsp_transport=tcp",
+    }
+
+    rtsp_url = camera_streams.get(camera_id)
+    if not rtsp_url:
+        return f"Camera ID {camera_id} not found.", 404
+
     def generate():
         cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+        if not cap.isOpened():
+            logging.error(f"Cannot open RTSP for camera {camera_id}.")
+            return
+
         while True:
             success, frame = cap.read()
             if not success:
+                logging.warning(f"Camera {camera_id}: No frame received.")
                 break
-            _, buffer = cv2.imencode('.jpg', frame)
+
+            # Encode as JPEG
+            ret, buffer = cv2.imencode('.jpg', frame)
+            if not ret:
+                logging.warning(f"Camera {camera_id}: Could not encode frame.")
+                continue
+
             yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                   b'Content-Type: image/jpeg\r\n\r\n' +
+                   buffer.tobytes() +
+                   b'\r\n')
         cap.release()
 
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-
 @app.route('/token_counts', methods=['GET'])
 def get_token_counts():
     """
-    API endpoint to fetch the count of active and resolved tokens.
+    Return counts of 'Pending' vs 'Resolved' tokens.
     """
     try:
-        conn, cursor = init_db()  # Reuse the existing init_db function
+        conn, cursor = init_db()
+        cursor.execute("SELECT COUNT(*) FROM tokens WHERE token_status='Pending'")
+        pending = cursor.fetchone()[0]
 
-        # Fetch count of active tokens (Pending status)
-        cursor.execute("SELECT COUNT(*) FROM tokens WHERE token_status = 'Pending'")
-        active_token_count = cursor.fetchone()[0]
-
-        # Fetch count of resolved tokens
-        cursor.execute("SELECT COUNT(*) FROM tokens WHERE token_status = 'Resolved'")
-        resolved_token_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM tokens WHERE token_status='Resolved'")
+        resolved = cursor.fetchone()[0]
 
         conn.close()
-
-        # Return counts as a response
-        response = {
-            "active_tokens_count": active_token_count,
-            "resolved_tokens_count": resolved_token_count
-        }
-
-        return response, 200
-
+        return {"pending": pending, "resolved": resolved}, 200
     except Exception as e:
-        logging.error(f"Error fetching token counts: {e}", exc_info=True)
-        return {"error": "Unable to fetch token counts"}, 500
+        logging.error(f"Error in /token_counts: {e}", exc_info=True)
+        return {"error": str(e)}, 500
 
-DB_PATH = os.getenv('DB_PATH', 'database/smart_building.db')
-
-def connect_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+###############################################################################
+#                           Camera & Worker Endpoints                         #
+###############################################################################
 
 @app.route('/cameras', methods=['GET'])
 def get_cameras():
+    """
+    Returns a list of all cameras in the DB table 'cameras'.
+    """
     try:
         conn = connect_db()
         cursor = conn.cursor()
@@ -86,33 +145,37 @@ def get_cameras():
         cameras = [dict(row) for row in rows]
         return jsonify(cameras), 200
     except Exception as e:
+        logging.error(f"Error fetching cameras: {e}", exc_info=True)
         return {"error": str(e)}, 500
     finally:
         conn.close()
 
 @app.route('/cameras', methods=['POST'])
 def save_cameras():
+    """
+    Saves (replaces) the entire cameras table with the provided list of cameras.
+    """
     try:
-        cameras = request.json  # Expecting a list of cameras
+        cameras = request.json
         conn = connect_db()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM cameras")  # Clear existing data before saving
-        for camera in cameras:
-            cursor.execute('''
-                INSERT INTO cameras (camera_id, camera_name, x_coordinate, y_coordinate, angle, room_no, floor)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                camera['camera_id'],
-                camera.get('camera_name', f'Camera {camera["camera_id"]}'),
-                camera['x_coordinate'],
-                camera['y_coordinate'],
-                camera['angle'],
-                camera.get('room_no', 'Unknown'),
-                camera.get('floor', 0)
+        cursor.execute("DELETE FROM cameras")  # Clear existing data
+        for c in cameras:
+            cursor.execute("""
+                INSERT INTO cameras (camera_name, x_coordinate, y_coordinate, angle, room_no, floor)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                c.get('camera_name', f"Camera {c.get('camera_id', '')}"),
+                c['x_coordinate'],
+                c['y_coordinate'],
+                c['angle'],
+                c.get('room_no', 'Unknown'),
+                c.get('floor', 0)
             ))
         conn.commit()
-        return {"message": "Cameras saved successfully."}, 200
+        return {"message": "Cameras saved successfully"}, 200
     except Exception as e:
+        logging.error(f"Error saving cameras: {e}", exc_info=True)
         return {"error": str(e)}, 500
     finally:
         conn.close()
@@ -144,12 +207,15 @@ def add_worker():
         data = request.json
         conn = connect_db()
         cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO workers (worker_name, worker_number, worker_email, status)
-            VALUES (?, ?, ?, ?)
-        ''', (data['name'], data['number'], data['email'], 'free'))
+        cursor.execute("""
+            INSERT INTO workers (worker_name, worker_number, worker_email)
+            VALUES (?, ?, ?)
+        """, (data['name'], data['number'], data['email']))
         conn.commit()
         return {"message": "Worker added successfully."}, 201
+    except sqlite3.IntegrityError as ie:
+        logging.error(f"Integrity Error adding worker: {ie}", exc_info=True)
+        return {"error": "Worker with this email already exists."}, 400
     except Exception as e:
         logging.error(f"Error adding worker: {e}", exc_info=True)
         return {"error": str(e)}, 500
@@ -159,19 +225,24 @@ def add_worker():
 @app.route('/workers/<int:worker_id>', methods=['PUT'])
 def update_worker(worker_id):
     """
-    Update a worker's status or details.
+    Update an existing worker's status or details.
     """
     try:
         data = request.json
         conn = connect_db()
         cursor = conn.cursor()
-        cursor.execute('''
+        cursor.execute("""
             UPDATE workers
-            SET worker_name = ?, worker_number = ?, worker_email = ?, status = ?
-            WHERE worker_id = ?
-        ''', (data['name'], data['number'], data['email'], data['status'], worker_id))
+            SET worker_name=?, worker_number=?, worker_email=?, status=?
+            WHERE worker_id=?
+        """, (data['name'], data['number'], data['email'], data['status'], worker_id))
         conn.commit()
+        if cursor.rowcount == 0:
+            return {"error": "Worker not found."}, 404
         return {"message": "Worker updated successfully."}, 200
+    except sqlite3.IntegrityError as ie:
+        logging.error(f"Integrity Error updating worker: {ie}", exc_info=True)
+        return {"error": "Worker with this email already exists."}, 400
     except Exception as e:
         logging.error(f"Error updating worker: {e}", exc_info=True)
         return {"error": str(e)}, 500
@@ -186,146 +257,126 @@ def delete_worker(worker_id):
     try:
         conn = connect_db()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM workers WHERE worker_id = ?", (worker_id,))
+        cursor.execute("DELETE FROM workers WHERE worker_id=?", (worker_id,))
         conn.commit()
+        if cursor.rowcount == 0:
+            return {"error": "Worker not found."}, 404
         return {"message": "Worker deleted successfully."}, 200
     except Exception as e:
         logging.error(f"Error deleting worker: {e}", exc_info=True)
         return {"error": str(e)}, 500
     finally:
         conn.close()
-    
+
+###############################################################################
+#                           Token / Worker Logic                              #
+###############################################################################
+
 def assign_worker(conn, cursor):
+    """
+    Assign the least-recently-assigned free worker, mark them as 'occupied'.
+    """
     try:
-        # Select the least-recently-assigned free worker
-        cursor.execute('''
-            SELECT worker_id, worker_email 
+        cursor.execute("""
+            SELECT worker_id, worker_email
             FROM workers
-            WHERE status = 'free'
+            WHERE status='free'
             ORDER BY last_assigned ASC NULLS FIRST
             LIMIT 1;
-        ''')
-        result = cursor.fetchone()
-        if result:
-            worker_id, worker_email = result
-            # Update worker status and set last_assigned time
-            cursor.execute('''
+        """)
+        row = cursor.fetchone()
+        if row:
+            worker_id, worker_email = row['worker_id'], row['worker_email']
+            cursor.execute("""
                 UPDATE workers
-                SET status = 'occupied', last_assigned = CURRENT_TIMESTAMP
-                WHERE worker_id = ?;
-            ''', (worker_id,))
+                SET status='occupied', last_assigned=CURRENT_TIMESTAMP
+                WHERE worker_id=?;
+            """, (worker_id,))
             conn.commit()
-            logging.info(f"Assigned Worker ID: {worker_id}, Email: {worker_email}")
+            logging.info(f"Assigned worker {worker_id} ({worker_email}).")
             return worker_id, worker_email
         else:
-            logging.warning("No free workers available for assignment.")
+            logging.warning("No free workers available.")
             return None, None
     except Exception as e:
-        logging.error(f"Error during worker assignment: {e}", exc_info=True)
+        logging.error(f"Error in assign_worker: {e}", exc_info=True)
         return None, None
 
-# Function to run Flask app
-def run_flask():
-    app.run(host='0.0.0.0', port=5001, debug=False)
-
-# At the end of the initialization, start the Flask thread
-flask_thread = threading.Thread(target=run_flask)
-flask_thread.daemon = True
-flask_thread.start()
-
-
-# Load environment variables for sensitive data
-load_dotenv()
-
-# Configure logging
-logging.basicConfig(
-    filename='connection_dvr.log',
-    level=logging.INFO,  # You may set this to logging.DEBUG for more detailed logs
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-
-# Set environment variable for FFMPEG (using TCP for stability)
-os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'
-
-# Load the YOLO model
-custom_weights_path = "runs/train/exp4/weights/best.pt"  # Path to your custom weights
-
-# Check if CUDA is available
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-# Load the custom YOLOv5 model
-try:
-    model = torch.hub.load('ultralytics/yolov5', 'custom', path=custom_weights_path, force_reload=True)
-    model.to(device)
-    model.eval()
-    logging.info("YOLO model loaded successfully.")
-except Exception as e:
-    logging.error(f"Error loading YOLO model: {e}")
-    exit(1)
-
-# Queue to store frames for the RTSP stream
-frame_queue = Queue(maxsize=10)  # Adjust size based on memory constraints
-
-# RTSP URL for the DVR camera stream (update as needed)
-rtsp_url = "rtsp://smart:1234@192.168.1.207:554/avstream/channel=7/stream=1.sdp"
-
-# Initialize a lock for database operations (optional)
-db_lock = threading.Lock()
-
-# Function to create a new database connection
-def init_db():
-    db_path = os.path.join('database', 'smart_building.db')
+def release_worker(conn, cursor, worker_id):
+    """
+    Release the worker (mark as 'free').
+    """
     try:
-        conn = sqlite3.connect(db_path, check_same_thread=False)
-        cursor = conn.cursor()
-        logging.info("Database connected successfully.")
-        return conn, cursor
-    except sqlite3.Error as e:
-        logging.error(f"Failed to connect to the database: {e}")
-        exit(1)
+        cursor.execute("""
+            UPDATE workers
+            SET status='free'
+            WHERE worker_id=?;
+        """, (worker_id,))
+        updated = cursor.rowcount
+        conn.commit()
+        if updated:
+            logging.info(f"Released worker {worker_id}.")
+        else:
+            logging.warning(f"Attempted to release worker {worker_id}, but no rows were updated.")
+        return updated > 0
+    except Exception as e:
+        logging.error(f"Error in release_worker: {e}", exc_info=True)
+        return False
 
-# Function to log detection into the database
+###############################################################################
+#                     Database Logging & Notification Logic                   #
+###############################################################################
+
 def log_detection(conn, cursor, item, confidence, timestamp, location, worker_id=None, reason='Detected'):
+    """
+    Log a detection event into the 'tokens' table.
+    """
     try:
-        cursor.execute('''
+        cursor.execute("""
             INSERT INTO tokens (token_reason, token_location, token_assigned, token_status, token_start, token_end_time, confidence)
             VALUES (?, ?, ?, 'Pending', ?, NULL, ?)
-        ''', (reason, location, worker_id, timestamp, confidence))
-        token_id = cursor.lastrowid  # Get the last inserted token_id
+        """, (reason, location, worker_id, timestamp, confidence))
+        token_id = cursor.lastrowid
         conn.commit()
-        logging.info(f"Logged detection: {item} at {location} with confidence {confidence:.2f}, reason: {reason}, token_id: {token_id}")
+        logging.info(f"Logged detection: {item} at {location} with confidence={confidence:.2f}, reason={reason}, token_id={token_id}")
         return token_id
     except Exception as e:
         logging.error(f"Error during logging detection: {e}", exc_info=True)
         return None
 
-# Function to update token status to "Resolved" or other status
 def update_token_status(conn, cursor, token_id, status='Resolved'):
+    """
+    Update a token's status.
+    """
     try:
         end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute('''
+        cursor.execute("""
             UPDATE tokens
-            SET token_status = ?, token_end_time = ?
-            WHERE token_id = ?
-        ''', (status, end_time, token_id))
+            SET token_status=?, token_end_time=?
+            WHERE token_id=?;
+        """, (status, end_time, token_id))
         rows_updated = cursor.rowcount
         conn.commit()
-        logging.info(f"Token ID {token_id} has been updated to status '{status}'. Rows affected: {rows_updated}")
-        return rows_updated > 0
+        if rows_updated:
+            logging.info(f"Token {token_id} updated to '{status}'.")
+            return True
+        else:
+            logging.warning(f"Token {token_id} not found for updating.")
+            return False
     except Exception as e:
-        logging.error(f"Error during updating token status: {e}", exc_info=True)
+        logging.error(f"Error updating token status: {e}", exc_info=True)
         return False
 
-# Function to send email notifications
 def send_email_notification(worker_email, item, confidence, timestamp, location, status='Pending'):
-    # Email configuration from environment variables
-    SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com')  # Replace with your SMTP server
-    SMTP_PORT = int(os.getenv('SMTP_PORT', 587))  # Replace with your SMTP port (usually 587 for TLS)
-    SMTP_USERNAME = os.getenv('SMTP_USERNAME')  # Replace with your email
-    SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')  # Replace with your email password or App Password
-
-    FROM_EMAIL = os.getenv('FROM_EMAIL', SMTP_USERNAME)  # Sender email
-    TO_EMAIL = worker_email  # Recipient email
+    """
+    Send an email to the assigned worker about a detection or resolution.
+    """
+    SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
+    SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
+    SMTP_USERNAME = os.getenv('SMTP_USERNAME')
+    SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
+    FROM_EMAIL = os.getenv('FROM_EMAIL', SMTP_USERNAME)
+    TO_EMAIL = worker_email
 
     subject = f"Alert: {item} Detected - {status}"
     body = f"""
@@ -351,318 +402,327 @@ Details:
             server.ehlo()
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.sendmail(FROM_EMAIL, [TO_EMAIL], msg.as_string())
-            logging.info(f"Email notification sent to {TO_EMAIL} for {item} detected at {timestamp} with status '{status}'.")
+            logging.info(f"Email notification sent to {TO_EMAIL} for {item} at {timestamp} status='{status}'.")
     except Exception as e:
         logging.error(f"Failed to send email: {e}", exc_info=True)
 
-# Function to handle email notifications asynchronously
 def notification_worker(notification_queue):
+    """
+    Thread worker to asynchronously process and send email notifications.
+    """
     while True:
-        notification = notification_queue.get()
-        if notification == "STOP":
-            logging.info("Notification worker received stop signal.")
+        notif = notification_queue.get()
+        if notif == "STOP":
+            logging.info("Notification worker stopping.")
             break
         try:
-            worker_email, item, confidence, timestamp, location, status = notification
+            worker_email, item, confidence, timestamp, location, status = notif
             send_email_notification(worker_email, item, confidence, timestamp, location, status)
         except Exception as e:
-            logging.error(f"Error processing notification: {e}", exc_info=True)
+            logging.error(f"Notification worker error: {e}", exc_info=True)
         finally:
             notification_queue.task_done()
 
-# Function to assign a worker randomly and update their status to 'occupied'
-def assign_worker(conn, cursor):
-    try:
-        # Select a free worker randomly
-        cursor.execute('''
-            SELECT worker_id, worker_email FROM workers
-            WHERE status = 'free'
-            ORDER BY RANDOM()
-            LIMIT 1;
-        ''')
-        result = cursor.fetchone()
-        if result:
-            worker_id, worker_email = result
-            # Update worker status to 'occupied'
-            cursor.execute('''
-                UPDATE workers
-                SET status = 'occupied'
-                WHERE worker_id = ?;
-            ''', (worker_id,))
-            conn.commit()
-            logging.info(f"Assigned Worker ID: {worker_id}, Email: {worker_email}")
-            return worker_id, worker_email
-        else:
-            logging.warning("No free workers available for assignment.")
-            return None, None  # No workers available
-    except Exception as e:
-        logging.error(f"Error during worker assignment: {e}", exc_info=True)
-        return None, None
+###############################################################################
+#                          YOLO & RTSP Processing                             #
+###############################################################################
 
-# Function to release a worker (set status to 'free')
-def release_worker(conn, cursor, worker_id):
-    try:
-        cursor.execute('''
-            UPDATE workers
-            SET status = 'free'
-            WHERE worker_id = ?;
-        ''', (worker_id,))
-        rows_updated = cursor.rowcount
-        conn.commit()
-        logging.info(f"Released Worker ID: {worker_id}, set status to 'free'. Rows affected: {rows_updated}")
-        return rows_updated > 0
-    except Exception as e:
-        logging.error(f"Error during releasing worker: {e}", exc_info=True)
-        return False
+# Path to your custom YOLO model
+model_path = '/Users/karthiknutulapati/Desktop/smartbuilding/cv+v5/yolov5-master/runs/train/exp4/weights/best.pt'
 
-# Define the list of target items
-target_items = ["wallet"]  # Add more items as needed
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+try:
+    # Load the custom YOLO model using torch hub
+    model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path, force_reload=True)
+    model.to(device)
+    model.eval()
+    logging.info(f"Custom YOLO model loaded successfully from '{model_path}' on {device}.")
+except Exception as e:
+    logging.error(f"Error loading custom YOLO model: {e}")
+    exit(1)
 
-# Parameters for detection logic
-detection_duration_threshold = 10  # seconds
-detection_gap_threshold = 2        # seconds
-resolution_gap_threshold = 5       # seconds
+# Items you want to detect
+target_items = ["wallet"]  # Extend as needed
 
-# Initialize detection states
-detection_state = {item: False for item in target_items}
-detection_start_time = {item: None for item in target_items}
-last_detection_time = {item: None for item in target_items}
-detection_stop_time = {item: None for item in target_items}  # New variable
-assigned_token = {item: None for item in target_items}
+# Thresholds for detection logic (in seconds)
+detection_duration_threshold = 10  # Time item must be continuously visible to raise a token
+detection_gap_threshold = 2        # Time item must be absent to consider detection stopped
+resolution_gap_threshold = 5       # Time item must be absent to resolve the token
 
-# Function to implement rate limiting for notifications
+# Rate-limiting notifications
 last_notification_time = {}
 notification_cooldown = 60  # seconds
 
 def should_send_notification(item, location):
+    """
+    Rate-limit notifications on a per-item+location basis.
+    """
     global last_notification_time
     key = f"{item}_{location}"
-    current_time = time.time()
+    now = time.time()
     if key in last_notification_time:
-        elapsed = current_time - last_notification_time[key]
+        elapsed = now - last_notification_time[key]
         if elapsed < notification_cooldown:
             logging.debug(f"Notification cooldown active for {item} at {location}.")
             return False
-    last_notification_time[key] = current_time
+    last_notification_time[key] = now
     return True
 
-# Function to process video from the RTSP stream
 def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
-    cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-    reconnect_delay = 5  # seconds
-    max_reconnect_attempts = 5
-    reconnect_attempts = 0
+    """
+    Thread function that reads RTSP frames, runs YOLO, and manages detection states.
+    Each camera has its own detection dictionaries so tokens are raised independently.
+    """
+    # Per-camera detection states
+    detection_state = {item: False for item in target_items}
+    detection_start_time = {item: None for item in target_items}
+    last_detection_time = {item: None for item in target_items}
+    detection_stop_time = {item: None for item in target_items}
+    assigned_token = {item: None for item in target_items}
 
-    # Initialize database connection for this thread
+    reconnect_attempts = 0
+    max_reconnect_attempts = 5
+    reconnect_delay = 5  # seconds
+
+    # Frame skipping to reduce lag
+    frame_count = 0
+    process_every_n_frames = 1  # Process every frame for real-time detection
+
+    # Initialize DB connection for this thread
     conn, cursor = init_db()
 
-    if not cap.isOpened():
-        logging.error(f"Cannot open RTSP stream at {rtsp_url}")
-        return
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            logging.warning("Failed to retrieve frame from RTSP stream. Attempting to reconnect...")
-            cap.release()
+    while reconnect_attempts <= max_reconnect_attempts:
+        cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+        if not cap.isOpened():
+            logging.error(f"[{rtsp_url}] Cannot open stream. Retrying in {reconnect_delay}s...")
             reconnect_attempts += 1
-            if reconnect_attempts > max_reconnect_attempts:
-                logging.error("Max reconnect attempts reached. Exiting video processing thread.")
-                break
             time.sleep(reconnect_delay)
-            cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-            if not cap.isOpened():
-                logging.error(f"Cannot reopen RTSP stream at {rtsp_url}. Retrying in {reconnect_delay} seconds...")
-                continue
-            else:
-                reconnect_attempts = 0  # Reset on successful reconnection
             continue
+        else:
+            logging.info(f"[{rtsp_url}] Stream opened successfully.")
+            reconnect_attempts = 0
 
-        reconnect_attempts = 0  # Reset on successful frame retrieval
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                logging.warning(f"[{rtsp_url}] No frame received. Attempting reconnect...")
+                cap.release()
+                reconnect_attempts += 1
+                if reconnect_attempts > max_reconnect_attempts:
+                    logging.error(f"[{rtsp_url}] Exceeded max reconnect attempts. Exiting thread.")
+                    break
+                time.sleep(reconnect_delay)
+                break
 
-        # Perform object detection on the frame
-        with torch.cuda.amp.autocast() if device == 'cuda' else contextlib.nullcontext():
-            results = model(frame)
+            # Skip frames if configured
+            frame_count += 1
+            if frame_count % process_every_n_frames != 0:
+                continue
 
-        # Render the results on the frame
-        annotated_frame = results.render()[0]
+            # YOLO inference
+            try:
+                with torch.cuda.amp.autocast() if device == 'cuda' else contextlib.nullcontext():
+                    results = model(frame, size=640)
+                annotated_frame = results.render()[0]
+            except Exception as e:
+                logging.error(f"[{rtsp_url}] Error in YOLO inference: {e}", exc_info=True)
+                continue
 
-        # Get current time
-        current_time = datetime.now()
+            current_time = datetime.now()
+            detected_items = {}
 
-        # Parse detections
-        detected_items = {}
-        for *xyxy, conf, cls in results.xyxy[0]:
-            label = model.names[int(cls)]
-            confidence = float(conf)
-            # Only consider target items with high enough confidence
-            if label in target_items and confidence >= 0.5:  # Adjust confidence threshold as needed
-                detected_items[label] = confidence
+            # Gather YOLO detections
+            for *xyxy, conf, cls_idx in results.xyxy[0]:
+                label = model.names[int(cls_idx)]
+                confidence = float(conf)
+                if label in target_items and confidence >= 0.5:
+                    detected_items[label] = confidence
 
-        # Update detection states
-        for item in target_items:
-            if item in detected_items:
-                if not detection_state[item]:
-                    detection_state[item] = True
-                    if detection_start_time[item] is None:
+            # Per-item detection logic
+            for item in target_items:
+                if item in detected_items:
+                    # If newly detected
+                    if not detection_state[item]:
+                        detection_state[item] = True
                         detection_start_time[item] = current_time
-                    detection_stop_time[item] = None  # Reset stop time
-                    logging.info(f"Detection started for {item} at {current_time}.")
-                last_detection_time[item] = current_time
-            else:
-                if detection_state[item]:
-                    if last_detection_time[item]:
-                        time_since_last_detection = (current_time - last_detection_time[item]).total_seconds()
-                        if time_since_last_detection > detection_gap_threshold:
+                        detection_stop_time[item] = None
+                        logging.info(f"[{rtsp_url}] Detection started for '{item}' at {current_time}.")
+                    last_detection_time[item] = current_time
+                else:
+                    # If item was being detected, check if it disappeared
+                    if detection_state[item]:
+                        if last_detection_time[item]:
+                            elapsed_gone = (current_time - last_detection_time[item]).total_seconds()
+                            if elapsed_gone > detection_gap_threshold:
+                                detection_state[item] = False
+                                detection_start_time[item] = None
+                                detection_stop_time[item] = current_time
+                                logging.info(f"[{rtsp_url}] Detection stopped for '{item}' at {current_time}.")
+                        else:
+                            # No last_detection_time, forcibly reset
                             detection_state[item] = False
                             detection_start_time[item] = None
-                            detection_stop_time[item] = current_time  # Set stop time
-                            logging.info(f"Detection stopped for {item} at {current_time}.")
-                    else:
-                        # No last detection time, reset state
-                        detection_state[item] = False
-                        detection_start_time[item] = None
-                        detection_stop_time[item] = current_time  # Set stop time
+                            detection_stop_time[item] = current_time
 
-            # Check for raising tokens
-            if detection_state[item]:
-                total_detection_time = (current_time - detection_start_time[item]).total_seconds()
-                if total_detection_time >= detection_duration_threshold and assigned_token[item] is None:
-                    logging.info(f"{item} detected continuously for {detection_duration_threshold} seconds. Assigning token.")
-                    worker_id, worker_email = assign_worker(conn, cursor)
-                    if worker_id and worker_email:
-                        token_timestamp = current_time.strftime("%Y-%m-%d %H:%M:%S")
-                        token_id = log_detection(
-                            conn, cursor,
-                            item=item,
-                            confidence=detected_items[item],
-                            timestamp=token_timestamp,
-                            location='Entrance Hall',  # Replace with dynamic location if needed
-                            worker_id=worker_id,
-                            reason='Detected'
-                        )
-                        if token_id:
-                            assigned_token[item] = token_id
-                            logging.info(f"Token {token_id} assigned to {item}.")
+                # Check if we should assign a token (continuous detection)
+                if detection_state[item]:
+                    total_time_detected = (current_time - detection_start_time[item]).total_seconds()
+                    if total_time_detected >= detection_duration_threshold and assigned_token[item] is None:
+                        logging.info(f"[{rtsp_url}] '{item}' >= {detection_duration_threshold}s, raising token.")
+                        worker_id, worker_email = assign_worker(conn, cursor)
+                        if worker_id and worker_email:
+                            ts_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
+                            # **Fix:** Check if 'item' is in detected_items before accessing
+                            if item in detected_items:
+                                confidence = detected_items[item]
+                                token_id = log_detection(
+                                    conn, cursor,
+                                    item=item,
+                                    confidence=confidence,
+                                    timestamp=ts_str,
+                                    location=rtsp_url,  # Use rtsp_url to identify camera/location
+                                    worker_id=worker_id
+                                )
+                                if token_id:
+                                    assigned_token[item] = token_id
+                                    if should_send_notification(item, rtsp_url):
+                                        notification_queue.put((
+                                            worker_email,
+                                            item,
+                                            confidence,
+                                            ts_str,
+                                            rtsp_url,
+                                            'Pending'
+                                        ))
+                                else:
+                                    logging.warning(f"[{rtsp_url}] Failed to log detection for '{item}'.")
+                            else:
+                                logging.warning(f"[{rtsp_url}] '{item}' not detected during token assignment.")
                         else:
-                            logging.warning(f"Failed to log detection for {item}.")
-                            continue  # Skip further processing for this item
+                            logging.warning(f"[{rtsp_url}] No free workers to assign for '{item}' detection.")
 
-                        if should_send_notification(item, 'Entrance Hall'):
-                            notification_queue.put((
-                                worker_email,
-                                item,
-                                detected_items[item],
-                                token_timestamp,
-                                'Entrance Hall',
-                                'Pending'
-                            ))
-                    else:
-                        logging.warning(f"No available workers to assign for {item} detection.")
-
-            # Check for token resolution
-            if assigned_token[item] is not None:
-                if not detection_state[item]:
+                # Check for token resolution
+                if assigned_token[item] is not None and not detection_state[item]:
+                    # If detection stopped, see if we pass resolution threshold
                     if detection_stop_time[item]:
-                        time_since_detection_stop = (current_time - detection_stop_time[item]).total_seconds()
-                        if time_since_detection_stop >= resolution_gap_threshold:
-                            logging.info(f"{item} has been absent for {resolution_gap_threshold} seconds. Resolving token.")
-                            try:
-                                token_id = assigned_token[item]
-                                logging.info(f"Attempting to resolve token {token_id}")
-                                # Update token status
-                                updated = update_token_status(conn, cursor, token_id, status='Resolved')
-                                if not updated:
-                                    logging.warning(f"Token {token_id} status update failed.")
-                                    continue  # Skip further processing if update failed
-
-                                # Get the worker assigned to this token
-                                cursor.execute('''
-                                    SELECT token_assigned FROM tokens
-                                    WHERE token_id = ?
-                                ''', (token_id,))
-                                result = cursor.fetchone()
-                                logging.info(f"Token {token_id} query result: {result}")
-                                if result and result[0]:
-                                    worker_assigned_id = result[0]
-                                    logging.info(f"Worker assigned ID: {worker_assigned_id}")
-
-                                    # Retrieve worker's email
-                                    cursor.execute('SELECT worker_email FROM workers WHERE worker_id = ?', (worker_assigned_id,))
-                                    worker_email_result = cursor.fetchone()
-                                    logging.info(f"Worker email query result: {worker_email_result}")
-                                    if worker_email_result:
-                                        worker_email = worker_email_result[0]
-                                        if should_send_notification(item, 'Entrance Hall'):
+                        absent_time = (current_time - detection_stop_time[item]).total_seconds()
+                        if absent_time >= resolution_gap_threshold:
+                            token_id = assigned_token[item]
+                            logging.info(f"[{rtsp_url}] '{item}' absent for {resolution_gap_threshold}s, resolving token {token_id}.")
+                            updated = update_token_status(conn, cursor, token_id, 'Resolved')
+                            if updated:
+                                # Retrieve assigned worker ID from token
+                                cursor.execute("SELECT token_assigned FROM tokens WHERE token_id=?", (token_id,))
+                                row = cursor.fetchone()
+                                if row and row['token_assigned']:
+                                    assigned_worker_id = row['token_assigned']
+                                    # Retrieve worker email
+                                    cursor.execute("SELECT worker_email FROM workers WHERE worker_id=?", (assigned_worker_id,))
+                                    email_row = cursor.fetchone()
+                                    if email_row:
+                                        worker_email = email_row['worker_email']
+                                        if should_send_notification(item, rtsp_url):
                                             notification_queue.put((
                                                 worker_email,
                                                 item,
-                                                0.0,  # Confidence is 0 for resolved
+                                                0.0,  # Confidence not relevant for resolution
                                                 current_time.strftime("%Y-%m-%d %H:%M:%S"),
-                                                'Entrance Hall',
+                                                rtsp_url,
                                                 'Resolved'
                                             ))
                                     # Release the worker
-                                    released = release_worker(conn, cursor, worker_assigned_id)
+                                    released = release_worker(conn, cursor, assigned_worker_id)
                                     if not released:
-                                        logging.warning(f"Failed to release worker ID {worker_assigned_id}.")
-                                    else:
-                                        logging.info(f"Token {token_id} for {item} has been resolved and worker released.")
+                                        logging.warning(f"[{rtsp_url}] Failed to release worker {assigned_worker_id}.")
                                 else:
-                                    logging.warning(f"No worker assigned to token {token_id}.")
-                                # Reset token assignment and detection states
+                                    logging.warning(f"[{rtsp_url}] Token {token_id} has no assigned worker.")
+                                # Reset detection and token state
                                 assigned_token[item] = None
                                 detection_state[item] = False
                                 detection_start_time[item] = None
                                 last_detection_time[item] = None
-                                detection_stop_time[item] = None  # Reset stop time
-                            except Exception as e:
-                                logging.error(f"Error during token resolution: {e}", exc_info=True)
-                                continue
+                                detection_stop_time[item] = None
+                            else:
+                                logging.warning(f"[{rtsp_url}] Failed to update token {token_id} to 'Resolved'.")
 
-        # Put the annotated frame in the queue for display in the main thread
-        if not frame_queue.full():
-            frame_queue.put(annotated_frame)
+            # Put the annotated frame into the queue for display
+            if not frame_queue.full():
+                frame_queue.put(annotated_frame)
 
-    # Close the database connection when the thread finishes
+        cap.release()
+        if reconnect_attempts > max_reconnect_attempts:
+            logging.error(f"[{rtsp_url}] Exiting thread after exceeding max reconnect attempts.")
+            break
+
+    # Close DB connection
     conn.close()
 
-# Create a queue for notifications
-notification_queue = Queue()
+###############################################################################
+#                     Spawning Threads & Main Display Loop                    #
+###############################################################################
 
-# Start the notification worker thread
-notification_thread = threading.Thread(target=notification_worker, args=(notification_queue,))
+def run_flask():
+    """
+    Runs the Flask server on a separate thread.
+    """
+    app.run(host='0.0.0.0', port=5001, debug=False)
+
+# Start Flask thread
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
+
+# Create a notification queue for asynchronous email alerts
+notification_queue = Queue()
+notification_thread = threading.Thread(target=notification_worker, args=(notification_queue,), daemon=True)
 notification_thread.start()
 
-# Create and start a thread for processing the RTSP stream
-detection_thread = threading.Thread(target=process_rtsp_stream, args=(rtsp_url, model, frame_queue, notification_queue))
-detection_thread.daemon = True  # Daemonize thread to exit when main thread exits
-detection_thread.start()
+# List of cameras/RTSP URLs for processing
+camera_urls = [
+    "rtsp://admin:admin123@192.168.29.194:554/Streaming/Channels/202?rtsp_transport=tcp",
+    "rtsp://admin:admin123@192.168.29.194:554/Streaming/Channels/302?rtsp_transport=tcp",
+    "rtsp://admin:admin123@192.168.29.194:554/Streaming/Channels/402?rtsp_transport=tcp",
+]
 
-# Function to clean up resources
+frame_queues = {}
+detection_threads = {}
+
+# Spawn a detection thread per camera
+for url in camera_urls:
+    frame_queues[url] = Queue(maxsize=2)  # Keep small queue size to reduce lag
+    t = threading.Thread(
+        target=process_rtsp_stream,
+        args=(url, model, frame_queues[url], notification_queue),
+        daemon=True
+    )
+    detection_threads[url] = t
+    t.start()
+
 def cleanup():
+    """
+    Graceful shutdown: stops threads, cleans up queues.
+    """
     # Signal the notification worker to stop
     notification_queue.put("STOP")
-
-    # Wait for queues to be processed
     notification_queue.join()
 
-    # Wait for threads to finish
-    detection_thread.join(timeout=5)
-    notification_thread.join(timeout=5)
+    # Join detection threads
+    for t in detection_threads.values():
+        t.join(timeout=5)
 
+    # Join notification thread
+    notification_thread.join(timeout=5)
     cv2.destroyAllWindows()
     logging.info("Shutdown complete.")
 
-# Main display loop with enhanced error handling
 try:
     while True:
-        # Display the frame from the RTSP stream
-        if not frame_queue.empty():
-            frame = frame_queue.get()
-            cv2.imshow('RTSP Stream with YOLO', frame)
+        # Display frames for each camera
+        for url in camera_urls:
+            if not frame_queues[url].empty():
+                frame = frame_queues[url].get()
+                cv2.imshow(f"YOLOv5 - {url}", frame)
 
-        # Break the loop if 'q' is pressed
+        # Quit on 'q'
         if cv2.waitKey(1) & 0xFF == ord('q'):
             logging.info("Exit command received. Shutting down.")
             break

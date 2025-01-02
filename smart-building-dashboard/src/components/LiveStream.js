@@ -3,9 +3,9 @@ import "./LiveStream.css";
 
 const LiveStream = () => {
   const videoFeeds = [
-    "http://localhost:5001/video_feed", // Replace with your actual feed URLs
-    "http://localhost:5001/video_feed",
-    "http://localhost:5001/video_feed",
+    "http://localhost:5001/video_feed/1", // Replace with your actual feed URLs
+    "http://localhost:5001/video_feed/2",
+    "http://localhost:5001/video_feed/3",
     "http://localhost:5001/video_feed",
     "http://localhost:5001/video_feed",
     "http://localhost:5001/video_feed",
