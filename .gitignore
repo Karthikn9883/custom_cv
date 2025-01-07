@@ -1,3 +1,16 @@
 venv/
 # .gitignore
 .env
+datasets/
+
+datasets/coco128/labels/train2017.cache
+datasets/coco128/labels/train2017/.DS_Store
+datasets/coco128/images/.DS_Store
+datasets/coco128/.DS_Store
+datasets/.DS_Store
+.DS_Store
+.DS_Store
+datasets/coco128/.DS_Store
+datasets/coco128/labels/.DS_Store
+datasets/coco128/labels/train2017.cache
+datasets/coco128/labels/train2017/.DS_Store

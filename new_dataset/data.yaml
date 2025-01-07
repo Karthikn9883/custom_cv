@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 5
+names: ['bottle', 'cup', 'person', 'spill', 'wallet']
+
+roboflow:
+  workspace: projectbuildsmart
+  project: buildsmart
+  version: 2
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/projectbuildsmart/buildsmart/dataset/2
