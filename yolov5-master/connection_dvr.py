@@ -807,10 +807,12 @@ load_dotenv()
 # Database path
 DB_PATH = os.getenv('DB_PATH', 'database/smart_building.db')
 
-# Set up logging with enhanced details
+# ---------------------------------------------------------------------------
+# Logging configuration: changed level from DEBUG to INFO to reduce overhead
+# ---------------------------------------------------------------------------
 logging.basicConfig(
     filename='connection_dvr.log',
-    level=logging.DEBUG,  # Changed to DEBUG for more verbose logs
+    level=logging.INFO,  # Changed from DEBUG to INFO for less overhead
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
@@ -857,9 +859,10 @@ def video_feed(camera_id):
     """
     # Define camera streams (you can fetch from DB if preferred)
     camera_streams = {
-        1: "rtsp://admin:admin123@192.168.29.194:554/Streaming/Channels/202?rtsp_transport=tcp",
-        2: "rtsp://admin:admin123@192.168.29.194:554/Streaming/Channels/302?rtsp_transport=tcp",
-        3: "rtsp://admin:admin123@192.168.29.194:554/Streaming/Channels/402?rtsp_transport=tcp",
+        1: "rtsp://admin:admin123@192.168.29.194:554/Streaming/Channels/102?rtsp_transport=tcp",
+        2: "rtsp://admin:admin123@192.168.29.194:554/Streaming/Channels/202?rtsp_transport=tcp",
+        3: "rtsp://admin:admin123@192.168.29.194:554/Streaming/Channels/302?rtsp_transport=tcp",
+        4: "rtsp://admin:admin123@192.168.29.194:554/Streaming/Channels/402?rtsp_transport=tcp",
     }
 
     rtsp_url = camera_streams.get(camera_id)
@@ -1242,9 +1245,9 @@ except Exception as e:
 target_items = ["wallet"]  # Extend as needed
 
 # Thresholds for detection logic (in seconds)
-detection_duration_threshold = 10  # Time item must be continuously visible to raise a token
-detection_gap_threshold = 2        # Time item must be absent to consider detection stopped
-resolution_gap_threshold = 5       # Time item must be absent to resolve the token
+detection_duration_threshold = 10  # Must be continuously visible for X secs
+detection_gap_threshold = 2        # Must be absent for X secs to consider "stopped"
+resolution_gap_threshold = 5       # Must be absent for X secs to resolve the token
 
 # Rate-limiting notifications
 last_notification_time = {}
@@ -1269,8 +1272,10 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
     """
     Thread function that reads RTSP frames, runs YOLO, and manages detection states.
     Each camera has its own detection dictionaries so tokens are raised independently.
+    
+    NOTE: We rely on Python's system time (datetime.now()) instead of DVR time
+    to avoid issues if the DVR has incorrect clock settings.
     """
-    # Per-camera detection states
     detection_state = {item: False for item in target_items}
     detection_start_time = {item: None for item in target_items}
     last_detection_time = {item: None for item in target_items}
@@ -1281,9 +1286,16 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
     max_reconnect_attempts = 5
     reconnect_delay = 5  # seconds
 
-    # Frame skipping to reduce lag
+    # ------------------------------------------------------------------------
+    # Adjust frame skipping to reduce load (e.g., process every 3rd or 5th frame)
+    # ------------------------------------------------------------------------
     frame_count = 0
-    process_every_n_frames = 1  # Process every frame for real-time detection
+    process_every_n_frames = 3  # Skip frames: run YOLO on 1 out of every 3 frames
+
+    # ------------------------------------------------------------------------
+    # Use a smaller inference size for faster detection (e.g., 416 or 320)
+    # ------------------------------------------------------------------------
+    inference_size = 416
 
     # Initialize DB connection for this thread
     try:
@@ -1323,13 +1335,16 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
             # YOLO inference
             try:
                 with torch.cuda.amp.autocast() if device == 'cuda' else contextlib.nullcontext():
-                    results = model(frame, size=640)
+                    results = model(frame, size=inference_size)
+                
+                # If you do NOT need the displayed bounding boxes, you can comment out:
                 annotated_frame = results.render()[0]
+
             except Exception as e:
                 logging.error(f"[{rtsp_url}] Error in YOLO inference: {e}", exc_info=True)
                 continue
 
-            current_time = datetime.now()
+            current_time = datetime.now()  # Rely on system time, not DVR time
             detected_items = {}
 
             # Gather YOLO detections
@@ -1373,7 +1388,6 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
                         worker_id, worker_email = assign_worker(conn, cursor)
                         if worker_id and worker_email:
                             ts_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
-                            # **Fix:** Check if 'item' is in detected_items before accessing
                             if item in detected_items:
                                 confidence = detected_items[item]
                                 token_id = log_detection(
@@ -1381,7 +1395,7 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
                                     item=item,
                                     confidence=confidence,
                                     timestamp=ts_str,
-                                    location=rtsp_url,  # Use rtsp_url to identify camera/location
+                                    location=rtsp_url,  # Use rtsp_url to identify the camera
                                     worker_id=worker_id
                                 )
                                 if token_id:
@@ -1451,7 +1465,10 @@ def process_rtsp_stream(rtsp_url, model, frame_queue, notification_queue):
                             else:
                                 logging.warning(f"[{rtsp_url}] Failed to update token ID {token_id} to 'Resolved'.")
 
-            # Put the annotated frame into the queue for display
+            # -------------------------------------------------------------------
+            # If you do NOT need to display frames, you can skip putting it in the queue.
+            # This step can be removed if there's no GUI needed.
+            # -------------------------------------------------------------------
             if not frame_queue.full():
                 frame_queue.put(annotated_frame)
 
@@ -1497,7 +1514,7 @@ detection_threads = {}
 
 # Spawn a detection thread per camera
 for url in camera_urls:
-    frame_queues[url] = Queue(maxsize=2)  # Keep small queue size to reduce lag
+    frame_queues[url] = Queue(maxsize=2)  # small queue to reduce lag
     t = threading.Thread(
         target=process_rtsp_stream,
         args=(url, model, frame_queues[url], notification_queue),
@@ -1530,7 +1547,7 @@ def cleanup():
 
 try:
     while True:
-        # Display frames for each camera
+        # Display frames for each camera (optional).
         for url in camera_urls:
             if not frame_queues[url].empty():
                 frame = frame_queues[url].get()
