@@ -1,0 +1,40 @@
+yolo_model: yolov8s-world.pt
+detection_prompts:
+- overflowing trash bin
+- full trash bin
+- half-full trash bin
+- empty trash bin
+- recycling bin
+- cardboard box on floor
+- litter on floor
+- spill on floor
+- puddle of water
+- wet floor sign
+- safety cone
+- blocked fire exit
+- fire extinguisher
+- fire alarm button
+- frayed cable
+- person slipping
+- unattended backpack
+- unattended suitcase
+- laptop
+- cell phone
+- wallet
+- keys
+- water bottle
+- notebook
+- jacket on chair
+- person
+- person walking
+- person sitting
+- cleaning cart
+- mop and bucket
+- open door
+- closed door
+- cat
+input_source: 0
+mqtt:
+  broker_address: localhost
+  port: 1883
+  detection_topic: smart-building/detections

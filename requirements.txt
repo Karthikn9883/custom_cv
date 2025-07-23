@@ -1,0 +1,40 @@
+# SCOPE Smart Building - Windows NVIDIA GPU Production Requirements
+# Optimized for Windows CUDA/TensorRT deployment
+
+# Core ML frameworks - CUDA compatible
+torch>=2.0.0
+torchvision>=0.15.0
+ultralytics>=8.0.0
+
+# Computer vision
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=9.5.0
+
+# DeepLabV3+ segmentation
+segmentation-models-pytorch>=0.3.3
+
+# Data handling and configuration
+PyYAML>=6.0
+pydantic>=2.0.0
+
+# Visualization and analysis
+matplotlib>=3.7.0
+tqdm>=4.65.0
+
+# MQTT for building integration
+paho-mqtt>=1.6.0
+
+# Redis for token queue
+redis>=4.5.0
+
+# Performance monitoring
+psutil>=5.9.0
+
+# Logging utilities
+colorlog>=6.7.0
+
+# Windows NVIDIA GPU specific (install separately)
+# Install CUDA Toolkit 11.8+ from NVIDIA
+# Install TensorRT from NVIDIA Developer Portal
+# pip install tensorrt --extra-index-url https://pypi.ngc.nvidia.com
