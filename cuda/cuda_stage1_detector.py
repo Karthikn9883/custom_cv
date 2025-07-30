@@ -28,7 +28,7 @@ except ImportError:
     exit(1)
 
 from cuda_memory_manager import get_memory_manager
-from deeplab.deeplabv3_spill_detector import DeepLabV3SpillDetector
+from bisenet.bisenetv2_spill_detector import BiSeNetV2SpillDetector
 from yolo.improved_object_detector import ImprovedObjectDetector
 
 @dataclass
@@ -163,17 +163,17 @@ class CUDAStage1Detector:
             raise
     
     def _load_spill_detector(self, config: Dict[str, Any]):
-        """Load and optimize DeepLabV3+ spill detection model"""
+        """Load and optimize BiSeNet V2 spill detection model"""
         try:
             model_path = config['models'].get('spill_detector')
             if model_path and Path(model_path).exists():
-                self.logger.info(f"Loading DeepLabV3+ spill detector with custom weights: {model_path}")
+                self.logger.info(f"Loading BiSeNet V2 spill detector with custom weights: {model_path}")
             else:
-                self.logger.info("Loading DeepLabV3+ spill detector with pre-trained weights")
+                self.logger.info("Loading BiSeNet V2 spill detector with pre-trained weights")
                 model_path = None
             
-            # Initialize DeepLabV3SpillDetector
-            self.spill_detector = DeepLabV3SpillDetector(
+            # Initialize BiSeNet V2 SpillDetector
+            self.spill_detector = BiSeNetV2SpillDetector(
                 model_path=model_path,
                 device=self.device
             )
@@ -181,10 +181,10 @@ class CUDAStage1Detector:
             # Warmup the spill detector
             self.spill_detector.warmup()
             
-            self.logger.info("DeepLabV3+ spill detector loaded successfully")
+            self.logger.info("BiSeNet V2 spill detector loaded successfully")
             
         except Exception as e:
-            self.logger.warning(f"Failed to load DeepLabV3+ spill detector: {e}")
+            self.logger.warning(f"Failed to load BiSeNet V2 spill detector: {e}")
             self.spill_detector = None
     
     def _optimize_model(self, model: YOLO, config: Dict[str, Any]):
@@ -231,7 +231,7 @@ class CUDAStage1Detector:
         # Pre-allocate common tensors for new model sizes
         common_shapes = [
             (1, 3, 640, 640),   # Object detection input (YOLOv8m)
-            (1, 3, 512, 512),   # Spill segmentation input (DeepLabV3+)
+            (1, 3, 512, 512),   # Spill segmentation input (BiSeNet V2)
             (50, 4),            # Bounding boxes (more detections with YOLOv8m)
             (50,),              # Confidences
             (50,),              # Classes
@@ -261,9 +261,9 @@ class CUDAStage1Detector:
             except Exception as e:
                 self.logger.warning(f"Object detector warmup failed: {e}")
         
-        # DeepLabV3+ spill detector is already warmed up in _load_spill_detector
+        # BiSeNet V2 spill detector is already warmed up in _load_spill_detector
         if self.spill_detector:
-            self.logger.info("DeepLabV3+ spill detector already warmed up")
+            self.logger.info("BiSeNet V2 spill detector already warmed up")
         
         self.warmup_done = True
         self.logger.info("Model warmup completed")

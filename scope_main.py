@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SCOPE Smart Building - Modern Main Entry Point
-CUDA-Optimized Detection System with DeepLabV3+ and YOLOv8m
+CUDA-Optimized Detection System with BiSeNet V2 and YOLOv8m
 """
 
 import argparse
@@ -15,7 +15,7 @@ def print_banner():
     print("🏢 SCOPE Smart Building - AI Vision System v4.1")
     print("=" * 80)
     print("🚀 CUDA-Optimized Architecture:")
-    print("   • DeepLabV3+ Spill Segmentation (512x512)")
+    print("   • BiSeNet V2 Spill Segmentation (512x512)")
     print("   • YOLOv8m Object Detection (640x640)")
     print("   • Dual-Model Stage 1 + RT-DETR Stage 2 Verification")
     print("   • MQTT Event Publishing + Redis Token Management")
@@ -98,13 +98,13 @@ def test_components(args):
     """Test individual components"""
     print("🧪 Testing SCOPE Components...")
     
-    # Test DeepLabV3+ spill detection
+    # Test BiSeNet V2 spill detection
     try:
-        from deeplab.deeplabv3_spill_detector import DeepLabV3SpillDetector
-        spill_detector = DeepLabV3SpillDetector()
-        print("✅ DeepLabV3+ spill detector loaded")
+        from bisenet.bisenetv2_spill_detector import BiSeNetV2SpillDetector
+        spill_detector = BiSeNetV2SpillDetector()
+        print("✅ BiSeNet V2 spill detector loaded")
     except Exception as e:
-        print(f"❌ DeepLabV3+ failed: {e}")
+        print(f"❌ BiSeNet V2 failed: {e}")
     
     # Test improved object detection
     try:
@@ -145,8 +145,8 @@ def convert_models(args):
         print("Converting YOLOv8m...")
         converter.convert_yolo_model("yolo/yolov8m.pt", "yolo/yolov8m.engine")
         
-        print("Converting DeepLabV3+...")
-        # Note: DeepLabV3+ TensorRT conversion needs custom implementation
+        print("Converting BiSeNet V2...")
+        # Note: BiSeNet V2 TensorRT conversion needs custom implementation
         
         print("✅ Model conversion completed")
         
@@ -199,7 +199,7 @@ def main():
         epilog="""
 Available Commands:
   pipeline    - Run complete CUDA pipeline (Stage 1 + Stage 2 + MQTT)
-  stage1      - Run Stage 1 detection only (DeepLabV3+ + YOLOv8m)
+  stage1      - Run Stage 1 detection only (BiSeNet V2 + YOLOv8m)
   stage2      - Run Stage 2 verification only (RT-DETR)
   test        - Test all components individually
   convert     - Convert models to TensorRT engines

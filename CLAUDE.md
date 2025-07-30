@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is part of the **SCOPE (Smart Campus Operations & Predictive Environment)** smart building computer vision system. The project implements a **CUDA-optimized dual-model architecture** for comprehensive spill detection and building safety monitoring:
+This is part of the **SCOPE (Smart Campus Operations & Predictive Environment)** smart building computer vision system. The project implements a **CUDA-optimized multi-model architecture** for comprehensive spill detection and building safety monitoring:
 
-1. **DeepLabV3+ Spill Segmentation** (`deeplab/`): Pixel-level spill boundary detection with MobileNetV3 backbone
+1. **BiSeNet V2 Spill Segmentation** (`bisenet/`): Real-time bilateral segmentation for precise spill boundary detection
 2. **YOLOv8m Object Detection** (`yolo/`): High-accuracy building object detection for safety and maintenance
 
 ### System Context
@@ -31,7 +31,7 @@ The system employs a **CUDA-optimized dual-model architecture** with two-stage v
 - `cuda_memory_manager.py`: Memory optimization with tensor pooling
 
 **Model Components**:
-- **DeepLabV3+**: MobileNetV3 backbone, 512x512 input, pixel-level spill segmentation
+- **BiSeNet V2**: Bilateral segmentation network, 512x512 input, real-time spill segmentation with dual-path architecture
 - **YOLOv8m**: 640x640 input, building-relevant object detection (COCO filtered)
 - **Parallel Processing**: Simultaneous inference with CUDA streams
 
@@ -114,8 +114,8 @@ python stage1_detector.py --test
 
 ### Model Development
 ```bash
-# Train DeepLabV3+ spill segmentation
-python deeplab/train_deeplabv3.py
+# Train BiSeNet V2 spill segmentation
+python bisenet/train_bisenetv2.py
 
 # Test improved object detection
 python yolo/test_improved_detector.py
@@ -156,9 +156,11 @@ python utils/performance_benchmark.py
 - `cuda_config.yaml`: CUDA-specific configuration
 
 ### Model Modules
-- `deeplab/deeplabv3_spill_detector.py`: **NEW** - DeepLabV3+ spill segmentation
+- `bisenet/bisenetv2_spill_detector.py`: **NEW** - BiSeNet V2 real-time spill segmentation
+- `bisenet/bisenetv2_model.py`: **NEW** - Core BiSeNet V2 architecture implementation
 - `yolo/improved_object_detector.py`: **NEW** - YOLOv8m building object detection
 - `yolo/yolov8m.pt`: High-accuracy object detection model
+- `deeplab/deeplabv3_spill_detector.py`: Legacy DeepLabV3+ model (archived)
 - `models/coco_spill_detector.pt`: Legacy SegFormer model (archived)
 
 ### Cross-Platform Development (`mac/`)
@@ -200,9 +202,16 @@ custom_cv/
 │   ├── mac_memory_manager.py          # MPS memory management
 │   └── mac_config.yaml               # Mac configuration
 │
-├── deeplab/                           # DeepLabV3+ spill segmentation
-│   ├── deeplabv3_spill_detector.py    # NEW: Segmentation model
-│   └── train_deeplabv3.py            # Training script
+├── bisenet/                           # BiSeNet V2 spill segmentation
+│   ├── bisenetv2_spill_detector.py    # NEW: Real-time segmentation model
+│   ├── bisenetv2_model.py             # NEW: Core BiSeNet V2 architecture
+│   ├── train_bisenetv2.py             # CUDA-optimized training script
+│   ├── dataset.py                     # COCO dataset loader
+│   └── losses.py                      # Loss functions (CrossEntropy + Dice)
+│
+├── deeplab/                           # Legacy DeepLabV3+ (archived)
+│   ├── deeplabv3_spill_detector.py    # Archived: DeepLabV3+ implementation
+│   └── train_deeplabv3.py            # Archived: Training script
 │
 ├── yolo/                              # Improved object detection
 │   ├── improved_object_detector.py    # NEW: YOLOv8m detector
@@ -233,12 +242,13 @@ custom_cv/
 
 ## Model Configuration
 
-### DeepLabV3+ Spill Segmentation (Current)
-- Base model: DeepLabV3+ with MobileNetV3 backbone
+### BiSeNet V2 Spill Segmentation (Current)
+- Base model: BiSeNet V2 with bilateral segmentation architecture
 - Input size: 512x512
 - Output: Binary segmentation (background/spill)
-- Optimization: Pre-trained weights, fine-tuned for 2-class segmentation
-- Performance: Pixel-level precision for spill boundary detection
+- Architecture: Dual-path design for speed and accuracy balance
+- Optimization: Custom trained on spill dataset with CUDA acceleration
+- Performance: Real-time inference with superior boundary detection
 
 ### YOLOv8m Object Detection (Current)
 - Base model: YOLOv8m (medium variant for accuracy/speed balance)
@@ -248,17 +258,20 @@ custom_cv/
 - Performance: Superior accuracy compared to YOLOv8n-world
 
 ### Legacy Models (Archived)
-- SegFormer-b2: Replaced by DeepLabV3+ for better performance
+- DeepLabV3+: Replaced by BiSeNet V2 for faster real-time performance
+- SegFormer-b2: Replaced by BiSeNet V2 for better segmentation accuracy
 - YOLOv8s-world: Replaced by YOLOv8m for improved accuracy
 
 ## Training Configuration
 
-### DeepLabV3+ Training
-- Pre-trained backbone: MobileNetV3 on ImageNet
-- Fine-tuning: 2-class segmentation (background, spill)
-- Loss function: CrossEntropyLoss with class weighting
-- Optimization: AdamW with learning rate scheduling
-- Data augmentation: Horizontal flip, color jitter, rotation
+### BiSeNet V2 Training
+- Architecture: Bilateral segmentation with detail and semantic paths
+- Task: 2-class segmentation (background, spill)
+- Loss function: Combined CrossEntropyLoss + Dice loss for better boundary detection
+- Optimization: AdamW with cosine annealing schedule
+- Data augmentation: Horizontal flip, rotation, scaling, color jitter, cutout
+- Hardware: CUDA-optimized for NVIDIA RTX 4070 (8GB VRAM)
+- Mixed precision: FP16 for memory efficiency and speed
 
 ### YOLOv8m Configuration
 - Pre-trained: COCO 80-class detection
@@ -271,7 +284,7 @@ custom_cv/
 ### CUDA Pipeline (Production)
 **Complete Two-Stage Processing**:
 - Input: Camera streams (RTSP, webcam, file)
-- Stage 1: DeepLabV3+ spill segmentation + YOLOv8m object detection
+- Stage 1: BiSeNet V2 spill segmentation + YOLOv8m object detection
 - Stage 2: RT-DETR verification of Stage 1 detections
 - Output: MQTT events with confidence fusion scores
 - Performance: <2s latency, 99.9% accuracy target
@@ -283,11 +296,11 @@ custom_cv/
 - Half precision (FP16) for memory efficiency
 
 ### Individual Model Testing
-**DeepLabV3+ Spill Detection**:
+**BiSeNet V2 Spill Detection**:
 - Input: Any image format
-- Processing: 512x512 inference with mask generation
-- Output: Spill regions with confidence scores and geometric analysis
-- Visualization: Red overlay on detected spill areas
+- Processing: 512x512 bilateral segmentation with dual-path inference
+- Output: Real-time spill regions with confidence scores and precise boundary detection
+- Visualization: Red overlay on detected spill areas with improved edge accuracy
 
 **YOLOv8m Object Detection**:
 - Input: Images or video streams
@@ -347,13 +360,15 @@ This module serves as **SCOPE 4.1 Layer 1 Edge Computing** in the smart building
 - **Phase 2**: User feedback identified spill detection issues
 - **Phase 3**: Replacement with DeepLabV3+ segmentation approach
 - **Phase 4**: Upgrade to YOLOv8m for improved object detection accuracy
-- **Current**: CUDA-optimized dual-model with two-stage verification
+- **Phase 5**: Migration to BiSeNet V2 for real-time performance
+- **Current**: CUDA-optimized multi-model with two-stage verification
 
 ### Model Selection Rationale
-- **DeepLabV3+ over SegFormer**: Better spill boundary detection and mobile optimization
+- **BiSeNet V2 over DeepLabV3+**: Superior real-time performance with bilateral architecture
 - **YOLOv8m over YOLOv8n-world**: Superior accuracy for building object detection
 - **Two-stage verification**: Meets 99.9% accuracy requirement with RT-DETR confirmation
 - **CUDA optimization**: Required for real-time edge deployment
+- **Bilateral segmentation**: Optimal balance between speed and boundary accuracy
 
 ### Cross-Platform Development Strategy
 - **Development**: Mac MPS for rapid iteration and testing

@@ -1,0 +1,232 @@
+# BiSeNet V2 Configuration for SCOPE Smart Building System
+# CUDA-optimized training configuration for NVIDIA RTX 4070 (8GB VRAM)
+
+# Model Configuration
+model:
+  name: "BiSeNetV2"
+  num_classes: 2  # Background + Spill
+  aux_mode: "train"  # "train" for auxiliary losses, "eval" for inference only
+  pretrained: false
+
+# Dataset Configuration
+dataset:
+  data_dir: "data"
+  image_size: [512, 512]  # [Height, Width]
+  binary_segmentation: true  # Combine liquid and spill into single class
+  
+  # Data splits
+  splits:
+    train: "train"
+    valid: "valid" 
+    test: "test"
+  
+  # Data augmentation (training only)
+  augmentation:
+    horizontal_flip: 0.5
+    random_rotate90: 0.5
+    shift_scale_rotate:
+      shift_limit: 0.1
+      scale_limit: 0.1
+      rotate_limit: 15
+      p: 0.5
+    brightness_contrast:
+      brightness_limit: 0.1
+      contrast_limit: 0.1
+      p: 0.5
+    hue_saturation_value:
+      hue_shift_limit: 10
+      sat_shift_limit: 15
+      val_shift_limit: 10
+      p: 0.5
+    gaussian_blur:
+      blur_limit: 3
+      p: 0.3
+    
+  # Normalization (ImageNet stats)
+  normalization:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+# Training Configuration
+training:
+  # Hardware settings
+  device: "cuda"  # "cuda", "mps", or "cpu"
+  mixed_precision: true  # Enable FP16 for memory efficiency
+  
+  # Batch settings (optimized for RTX 4070 8GB)
+  batch_size: 12  # Adjust based on memory usage
+  num_workers: 4
+  pin_memory: true
+  
+  # Training duration
+  epochs: 100
+  save_every: 10  # Save checkpoint every N epochs
+  validate_every: 5  # Validate every N epochs
+  
+  # Optimizer settings
+  optimizer:
+    name: "AdamW"
+    lr: 0.001
+    weight_decay: 0.0001
+    betas: [0.9, 0.999]
+    eps: 0.00000001  # 1e-8 in decimal format to avoid YAML parsing issues
+  
+  # Learning rate scheduler
+  scheduler:
+    name: "CosineAnnealingLR"
+    T_max: 100  # Match epochs
+    eta_min: 0.000001  # 1e-6 in decimal format to avoid YAML parsing issues
+    
+  # Alternative scheduler options:
+  # scheduler:
+  #   name: "StepLR"
+  #   step_size: 30
+  #   gamma: 0.1
+  #
+  # scheduler:
+  #   name: "ReduceLROnPlateau"
+  #   mode: "min"
+  #   factor: 0.5
+  #   patience: 10
+  #   min_lr: 0.000001
+
+# Loss Configuration
+loss:
+  # Main loss function
+  main_loss:
+    type: "combined"  # "ce", "dice", "focal", "combined", "bisenet"
+    ce_weight: 1.0
+    dice_weight: 1.0
+    focal_weight: 0.0  # Set > 0 to enable focal loss
+    
+  # BiSeNet V2 specific loss weights
+  main_loss_weight: 1.0
+  aux_loss_weight: 0.4
+  
+  # Class weights (auto-calculated if null)
+  class_weights: null  # [background_weight, spill_weight] or null for auto
+  
+  # Focal loss parameters (if enabled)
+  focal:
+    alpha: null  # Auto-balance or [class0_alpha, class1_alpha]
+    gamma: 2.0
+
+# Validation Configuration
+validation:
+  # Metrics to compute
+  metrics:
+    - "iou"
+    - "dice"
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1"
+  
+  # IoU thresholds for evaluation
+  iou_thresholds: [0.5, 0.7, 0.9]
+  
+  # Save best model based on metric
+  best_metric: "iou"  # "iou", "dice", "f1", etc.
+  best_mode: "max"  # "max" or "min"
+
+# Logging Configuration
+logging:
+  # Experiment tracking (gracefully handles missing dependencies)
+  use_tensorboard: true  # Will be disabled automatically if not installed
+  use_wandb: false  # Set to true and configure if using Weights & Biases
+  
+  # Log directories
+  log_dir: "logs"
+  checkpoint_dir: "checkpoints"
+  
+  # Logging frequency
+  log_every: 10  # Log every N batches
+  
+  # Wandb configuration (if enabled - requires: pip install wandb)
+  wandb:
+    project: "scope-bisenetv2"
+    entity: null  # Your wandb username/team
+    tags: ["bisenetv2", "spill-detection", "scope"]
+    
+  # Note: Missing dependencies are handled gracefully:
+  # - TensorBoard: Install with "pip install tensorboard"
+  # - Weights & Biases: Install with "pip install wandb"
+
+# Inference Configuration
+inference:
+  # Model checkpoint to load
+  checkpoint_path: null  # Path to .pth file
+  
+  # Inference settings
+  batch_size: 1
+  device: "cuda"
+  mixed_precision: true
+  
+  # Post-processing
+  confidence_threshold: 0.5
+  min_region_area: 100  # Minimum pixels for spill region
+  
+  # Output settings
+  save_predictions: true
+  save_visualizations: true
+  output_dir: "outputs"
+
+# Optimization Settings
+optimization:
+  # Memory optimization
+  gradient_checkpointing: false  # Enable if running out of memory
+  empty_cache_every: 100  # Clear CUDA cache every N batches
+  
+  # Gradient settings
+  max_grad_norm: 1.0  # Gradient clipping
+  accumulate_grad_batches: 1  # Gradient accumulation
+  
+  # Model compilation (PyTorch 2.0+) - Disabled due to Triton issues on Windows
+  compile_model: false  # Enable torch.compile for speed (disabled for Windows compatibility)
+  compile_mode: "reduce-overhead"  # "default", "reduce-overhead", "max-autotune"
+
+# Data Parallel Settings (Multi-GPU)
+parallel:
+  use_data_parallel: false  # Enable for multi-GPU training
+  use_distributed: false  # Enable for distributed training
+  local_rank: 0
+  world_size: 1
+
+# Resume Training
+resume:
+  checkpoint_path: null  # Path to checkpoint for resuming
+  resume_optimizer: true  # Resume optimizer state
+  resume_scheduler: true  # Resume scheduler state
+
+# Export Settings
+export:
+  # ONNX export
+  onnx:
+    enabled: false
+    opset_version: 11
+    dynamic_axes: true
+    
+  # TensorRT export
+  tensorrt:
+    enabled: false
+    precision: "fp16"  # "fp32", "fp16", "int8"
+    workspace_size: 1024  # MB
+    
+  # PyTorch JIT
+  torchscript:
+    enabled: false
+    optimize_for_inference: true
+
+# Environment Settings
+environment:
+  # Random seeds for reproducibility
+  seed: 42
+  deterministic: false  # Set to true for full reproducibility (slower)
+  
+  # CUDA settings
+  cuda:
+    benchmark: true  # Enable cuDNN benchmark for speed
+    allow_tf32: true  # Enable TF32 for faster training
+    
+  # Warnings
+  suppress_warnings: false

@@ -20,7 +20,7 @@ device:
 stage1:
   models:
     object_detector: "yolov8m.pt"           # Improved accuracy with YOLOv8m
-    spill_detector: null                    # DeepLabV3+ uses pre-trained model
+    spill_detector: null                    # BiSeNet V2 uses pre-trained model
   
   # Performance settings
   target_latency_ms: 20
@@ -40,7 +40,7 @@ stage1:
     building_filter: true                   # Filter for building-relevant objects
     
   spill_detection:
-    input_size: 512                         # DeepLabV3+ segmentation resolution
+    input_size: 512                         # BiSeNet V2 segmentation resolution
     fast_mode: true                         # Use fast mode for Stage 1
     min_spill_area: 100                     # Minimum pixels for spill detection
     
@@ -62,7 +62,7 @@ stage1:
 # Stage 2 Configuration - Heavy Verification  
 stage2:
   model: "rtdetr-l.pt"                      # Large model for accuracy
-  spill_verification: "deeplabv3"           # Use DeepLabV3+ for spill verification
+  spill_verification: "bisenetv2"           # Use BiSeNet V2 for spill verification
   precision: "fp16"
   confidence_threshold: 0.65
   iou_threshold: 0.5
