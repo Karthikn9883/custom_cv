@@ -384,6 +384,132 @@ This module serves as **SCOPE 4.1 Layer 1 Edge Computing** in the smart building
 
 ## Common Issues and Solutions
 
+### Jetson CUDA Setup & Troubleshooting
+
+#### **Issue: CUDA Not Available on Jetson (`cuda_available: False`)**
+
+**Symptoms:**
+- PyTorch reports `torch.cuda.is_available() = False`
+- Very poor performance (2 FPS, 300+ ms inference time)
+- GPU usage shows 0%
+- System uses CPU for inference
+
+**Diagnosis Commands:**
+```bash
+# 1. Check if NVIDIA GPU is detected
+nvidia-smi
+
+# 2. Check CUDA installation
+nvcc --version
+
+# 3. Check PyTorch CUDA support
+python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}')"
+
+# 4. Check JetPack version
+sudo apt show nvidia-jetpack
+
+# 5. Check device tree model
+cat /proc/device-tree/model
+```
+
+**Solutions:**
+
+**1. Fix PyTorch Installation (Most Common Issue)**
+```bash
+# Uninstall current PyTorch (likely CPU-only version)
+pip uninstall torch torchvision torchaudio
+
+# For JetPack 5.x (Jetson Orin series):
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Alternative: Use NVIDIA's pre-built wheels for Jetson
+# Check https://forums.developer.nvidia.com/t/pytorch-for-jetson/72048 for latest wheels
+wget https://developer.download.nvidia.com/compute/redist/jp/v511/pytorch/torch-2.0.0+nv23.05-cp38-cp38-linux_aarch64.whl
+pip install torch-2.0.0+nv23.05-cp38-cp38-linux_aarch64.whl
+```
+
+**2. Set CUDA Environment Variables**
+```bash
+# Add to ~/.bashrc
+echo 'export CUDA_HOME=/usr/local/cuda' >> ~/.bashrc
+echo 'export PATH=$PATH:$CUDA_HOME/bin' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CUDA_HOME/lib64' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**3. Install Jetson Stats for Monitoring**
+```bash
+pip install jetson-stats
+sudo reboot  # Required after jetson-stats installation
+```
+
+**4. Verify Installation**
+```bash
+# After reboot, test CUDA availability
+python -c "import torch; print('CUDA Available:', torch.cuda.is_available()); print('Device Count:', torch.cuda.device_count()); print('Current Device:', torch.cuda.current_device() if torch.cuda.is_available() else 'None')"
+
+# Test jtop monitoring
+jtop
+```
+
+**Performance Expectations After Fix:**
+- **FPS**: Should improve from 2-3 FPS to 15-25+ FPS
+- **Inference Time**: Should drop from 300-400ms to 30-50ms
+- **GPU Usage**: Should show 70-90% GPU utilization
+- **Memory**: Should use GPU memory instead of system RAM
+
+**5. Jetson Power Mode Optimization**
+```bash
+# Set to MAXN mode for maximum performance
+sudo nvpmodel -m 0
+sudo jetson_clocks
+
+# Check current power mode
+sudo nvpmodel -q
+```
+
+#### **Issue: Thermal Throttling on Jetson**
+
+**Symptoms:**
+- Performance degrades over time
+- Temperature >70°C
+- GPU frequency scaling down
+
+**Solutions:**
+```bash
+# Monitor thermal status
+jtop  # Look for temperature and throttling indicators
+
+# Improve cooling
+# - Ensure proper ventilation
+# - Consider active cooling fan
+# - Check thermal paste on heatsink
+
+# Reduce workload if necessary
+# - Use fast mode more frequently
+# - Lower input resolution
+# - Reduce frame rate
+```
+
+#### **Issue: Memory Issues on Jetson**
+
+**Symptoms:**
+- Out of memory errors
+- System becomes unresponsive
+- Swap usage high
+
+**Solutions:**
+```bash
+# Check memory usage
+free -h
+nvidia-smi  # For GPU memory
+
+# Optimize memory settings in code:
+# - Enable mixed precision (FP16)
+# - Reduce batch sizes
+# - Clear CUDA cache regularly
+```
+
 ### Model Loading
 - **Issue**: Model compatibility errors
 - **Solution**: Check model architecture matches expected format
