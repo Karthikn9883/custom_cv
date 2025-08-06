@@ -1,0 +1,70 @@
+# configs/main_config.yaml
+
+# --- Device Context (for MQTT Topic) ---
+# Defines the physical location of this device.
+device_context:
+  building: "House"
+  zone: "Living-room"
+
+# --- YOLO-World Settings ---
+yolo_model: 'yolov8s-world.pt' # Using the small, fast model for testing
+
+# --- Detection Prompts ---
+# Define the objects you want to detect in plain English
+detection_prompts:
+  # --- Waste Management ---
+  - 'overflowing trash bin'
+  - 'full trash bin'
+  - 'half-full trash bin'
+  - 'empty trash bin'
+  - 'recycling bin'
+  - 'cardboard box on floor'
+  - 'litter on floor'
+
+  # --- Safety & Hazard Detection ---
+  - 'spill on floor'
+  - 'puddle of water'
+  - 'wet floor sign'
+  - 'safety cone'
+  - 'blocked fire exit'
+  - 'fire extinguisher'
+  - 'fire alarm button'
+  - 'frayed cable'
+  - 'person slipping'
+
+  # --- Lost & Found Items ---
+  - 'unattended backpack'
+  - 'unattended suitcase'
+  - 'laptop'
+  - 'cell phone'
+  - 'wallet'
+  - 'keys'
+  - 'water bottle'
+  - 'notebook'
+  - 'jacket on chair'
+
+  # --- General Building & Occupancy ---
+  - 'person'
+  - 'person walking'
+  - 'person sitting'
+  - 'cleaning cart'
+  - 'mop and bucket'
+  - 'open door'
+  - 'closed door'
+  - 'cat'
+
+# --- Coordinate Localization ---
+# Path to the homography matrix file for pixel-to-world coordinate transformation.
+homography_matrix_path: "homography_matrix.yaml"
+  
+# --- Input Source ---
+# Use '0' for webcam, or provide a path to a video file e.g., '/path/to/video.mp4'
+input_source: "rtsp://192.168.1.228:554/avstream/channel=1/stream=0.sdp"
+
+# --- MQTT Broker Settings ---
+mqtt:
+  enabled: true # Set to true to enable MQTT publishing
+  broker_address: "localhost" # Or your MQTT broker's IP
+  port: 1883
+  detection_topic: "smart-building/detections"
+  message_interval_seconds: 10 # Cooldown in seconds before re-publishing a detection

@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pt
+*.png
+
+# IDEs
+.idea/
+.vscode/
+
+# Other
+*.log
