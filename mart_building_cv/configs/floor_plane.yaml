@@ -1,0 +1,25 @@
+floor_plane:
+  normal:
+  - -0.009052346251163539
+  - 0.22157299735928357
+  - 0.9751017700058657
+  point_on_plane:
+  - 0
+  - 0
+  - !!python/object/apply:numpy._core.multiarray.scalar
+    - !!python/object/apply:numpy.dtype
+      args:
+      - f8
+      - false
+      - true
+      state: !!python/tuple
+      - 3
+      - <
+      - null
+      - null
+      - null
+      - -1
+      - -1
+      - 0
+    - !!binary |
+      zTdQ5KbLAsA=

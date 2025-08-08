@@ -4,3 +4,4 @@ torchvision
 opencv-python
 pyyaml
 paho-mqtt
+trimesh

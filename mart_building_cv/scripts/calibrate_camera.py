@@ -1,149 +1,146 @@
-# mart_building_cv/scripts/calibrate_camera.py
-
 import cv2
 import numpy as np
 import yaml
 import os
-import sys
-import time
 
-# Add the project root to the Python path to allow importing project modules
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-from mart_building_cv.src.detection.detector import load_config
+# --- Configuration ---
+CHESSBOARD_SIZE = (9, 6)  # Number of inner corners (width, height)
+SQUARE_SIZE_MM = 30       # Real-world size of a chessboard square in millimeters
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 480
+CALIBRATION_FRAME_COUNT = 20 # Number of frames to capture for calibration
 
-# --- Global Variables ---
-image_points = []
-world_points = []
-FONT = cv2.FONT_HERSHEY_SIMPLEX
+# --- File Paths ---
+# Path to the main config file to get the camera source
+CONFIG_FILE = "/Users/Arshad_1/Desktop/projects/custom_cv_new/mart_building_cv/configs/main_config.yaml"
+# Path to save the output calibration data
+OUTPUT_FILE = "/Users/Arshad_1/Desktop/projects/custom_cv_new/mart_building_cv/configs/camera_intrinsics.yaml"
 
-# --- Function Definitions ---
-
-def mouse_callback(event, x, y, flags, param):
-    """Handles mouse clicks to select points in the image."""
-    if event == cv2.EVENT_LBUTTONDOWN:
-        if len(image_points) < 4:
-            image_points.append((x, y))
-            print(f"Selected image point #{len(image_points)}: ({x}, {y})")
-        else:
-            print("You have already selected 4 points. Press 's' to save or 'q' to quit.")
-
-def get_a4_world_coordinates():
-    """Returns the standardized real-world coordinates for an A4 paper."""
-    # Dimensions of A4 paper in inches: 8.27" x 11.69"
-    # We'll use a simplified 8" x 11" for this calibration
-    a4_dims = {"width": 8, "height": 11}
-    
-    # Define the four corners in a specific order:
-    # 1. Top-Left (0, 0)
-    # 2. Top-Right (width, 0)
-    # 3. Bottom-Right (width, height)
-    # 4. Bottom-Left (0, height)
-    world_points.extend([
-        [0, 0],
-        [a4_dims["width"], 0],
-        [a4_dims["width"], a4_dims["height"]],
-        [0, a4_dims["height"]]
-    ])
-    
-    print("\nUsing standardized A4 paper dimensions (8\" x 11\") for world coordinates:")
-    for i, p in enumerate(world_points):
-        print(f"  Point #{i+1}: {p}")
-    return np.array(world_points, dtype=np.float32)
-
-def save_homography_matrix(matrix, path):
-    """Saves the calculated homography matrix to a YAML file."""
+def load_camera_source_from_config(config_path):
+    """Loads the camera input source from the main YAML config file."""
+    if not os.path.exists(config_path):
+        print(f"Error: Main config file not found at {config_path}")
+        return None
     try:
-        with open(path, 'w') as file:
-            yaml.dump({'homography_matrix': matrix.tolist()}, file)
-        print(f"\nSuccessfully saved homography matrix to: {path}")
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        source = config.get('input_source')
+        if source is None:
+            print(f"Error: 'input_source' not found in {config_path}")
+            return None
+        # Convert to integer if it's a simple number for local webcams
+        if isinstance(source, str) and source.isdigit():
+            return int(source)
+        return source
     except Exception as e:
-        print(f"Error saving matrix: {e}")
+        print(f"Error reading or parsing config file: {e}")
+        return None
 
-# --- Main Execution ---
+def calibrate_camera():
+    """
+    Performs intrinsic camera calibration using a chessboard pattern.
+    Saves the camera matrix and distortion coefficients to a YAML file.
+    """
+    # Load camera source from the main config file
+    camera_source = load_camera_source_from_config(CONFIG_FILE)
+    if camera_source is None:
+        return
 
-def main():
-    # For calibration, we typically want a direct camera feed, not the RTSP stream.
-    # We will default to camera index 0.
-    # For calibration, we typically want a direct camera feed.
-    # On macOS, explicitly using the AVFOUNDATION backend can be more reliable.
-    calibration_camera_index = 0
-    cap = cv2.VideoCapture(calibration_camera_index, cv2.CAP_AVFOUNDATION)
+    # Prepare object points (0,0,0), (1,0,0), (2,0,0) ....,(8,5,0)
+    objp = np.zeros((CHESSBOARD_SIZE[0] * CHESSBOARD_SIZE[1], 3), np.float32)
+    objp[:, :2] = np.mgrid[0:CHESSBOARD_SIZE[0], 0:CHESSBOARD_SIZE[1]].T.reshape(-1, 2)
+    objp = objp * SQUARE_SIZE_MM
 
-    # Add a short delay to allow the camera to initialize, especially for Continuity Camera
-    time.sleep(2.0)
+    # Arrays to store object points and image points from all the images.
+    objpoints = []  # 3d point in real world space
+    imgpoints = []  # 2d points in image plane.
 
-    # If the default camera fails, then we can try the source from the config file.
+    # Initialize camera
+    print(f"Attempting to open camera source: {camera_source}")
+    cap = cv2.VideoCapture(camera_source)
     if not cap.isOpened():
-        print(f"INFO: Could not open default camera index {calibration_camera_index}. Trying config file source...")
-        config = load_config()
-        input_source = config.get('input_source', 1) # Default to 1 if not in config
-        cap = cv2.VideoCapture(input_source)
-        if not cap.isOpened():
-            print(f"Error: Could not open camera with index {input_source} from config.")
-            return
+        print("Error: Could not open video stream.")
+        return
 
-    window_name = "Camera Calibration - Click 4 points, then press 's'"
-    cv2.namedWindow(window_name)
-    cv2.setMouseCallback(window_name, mouse_callback)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
 
-    print("--- Camera Calibration with A4 Paper ---")
-    print("1. Place a standard A4 sheet of paper on the floor.")
-    print("2. Click on the 4 corners of the A4 paper in the following order:")
-    print("   - Top-Left")
-    print("   - Top-Right")
-    print("   - Bottom-Right")
-    print("   - Bottom-Left")
-    print("3. After selecting 4 points, press the 's' key to calculate and save.")
-    print("4. Press 'q' to quit at any time.")
+    print("\nStarting camera calibration...")
+    print(f"Show a {CHESSBOARD_SIZE[0]}x{CHESSBOARD_SIZE[1]} chessboard to the camera.")
+    print(f"We need to capture {CALIBRATION_FRAME_COUNT} good frames.")
+    print("Press 'c' to capture a frame. Press 'q' to quit.")
 
-    while True:
+    captured_frames = 0
+    while captured_frames < CALIBRATION_FRAME_COUNT:
         ret, frame = cap.read()
         if not ret:
-            print("Error: Failed to grab frame.")
+            print("Error: Failed to capture frame.")
             break
 
-        # Draw selected points on the frame
-        for i, point in enumerate(image_points):
-            cv2.circle(frame, point, 5, (0, 255, 0), -1)
-            cv2.putText(frame, str(i+1), (point[0]+10, point[1]-10), FONT, 0.7, (0, 255, 0), 2)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # Display instructions
-        cv2.putText(frame, "Click 4 points on the floor. Press 's' to save, 'q' to quit.", (10, 30), FONT, 0.7, (255, 255, 255), 2)
-        cv2.putText(frame, f"{len(image_points)}/4 points selected", (10, 60), FONT, 0.7, (0, 255, 0), 2)
+        # Find the chess board corners
+        ret, corners = cv2.findChessboardCorners(gray, CHESSBOARD_SIZE, None)
 
-        cv2.imshow(window_name, frame)
+        # If found, add object points, image points (after refining them)
+        if ret:
+            cv2.drawChessboardCorners(frame, CHESSBOARD_SIZE, corners, ret)
+            display_text = f"Frames captured: {captured_frames}/{CALIBRATION_FRAME_COUNT}"
+        else:
+            display_text = "Chessboard not detected."
+
+        cv2.putText(frame, display_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.imshow('Calibration', frame)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
-            break
-        
-        if key == ord('s'):
-            if len(image_points) == 4:
-                # Get the standardized world coordinates for A4 paper
-                world_coords = get_a4_world_coordinates()
-                
-                # Ensure image_points is a numpy array
-                image_coords = np.array(image_points, dtype=np.float32)
-
-                # Calculate the homography matrix
-                h_matrix, _ = cv2.findHomography(image_coords, world_coords)
-                print("\nCalculated Homography Matrix:")
-                print(h_matrix)
-                
-                # Define where to save the matrix
-                script_dir = os.path.dirname(__file__)
-                # Go up one level to mart_building_cv, then into configs
-                config_dir = os.path.abspath(os.path.join(script_dir, '..', 'configs'))
-                save_path = os.path.join(config_dir, 'homography_matrix.yaml')
-                
-                save_homography_matrix(h_matrix, save_path)
-                break # Exit after saving
-            else:
-                print("\nPlease select exactly 4 points before saving.")
+            print("Calibration cancelled by user.")
+            cap.release()
+            cv2.destroyAllWindows()
+            return
+        elif key == ord('c') and ret:
+            print(f"Frame {captured_frames + 1} captured!")
+            objpoints.append(objp)
+            imgpoints.append(corners)
+            captured_frames += 1
 
     cap.release()
     cv2.destroyAllWindows()
-    print("Calibration script finished.")
+
+    if len(objpoints) < 5:
+        print("Calibration failed: Not enough valid frames captured.")
+        return
+
+    print("\nAll frames captured. Calculating camera matrix...")
+    ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
+
+    if not ret:
+        print("Calibration failed. Could not compute camera matrix.")
+        return
+
+    # Save the calibration result
+    calibration_data = {
+        'camera_matrix': {
+            'rows': mtx.shape[0],
+            'cols': mtx.shape[1],
+            'data': mtx.tolist()
+        },
+        'distortion_coefficients': {
+            'rows': dist.shape[0],
+            'cols': dist.shape[1],
+            'data': dist.tolist()
+        }
+    }
+
+    try:
+        with open(OUTPUT_FILE, 'w') as f:
+            yaml.dump(calibration_data, f, default_flow_style=False)
+        print(f"\nSuccessfully saved calibration data to: {OUTPUT_FILE}")
+    except Exception as e:
+        print(f"Error saving YAML file: {e}")
 
 if __name__ == "__main__":
-    main()
+    # You will need a physical 9x6 chessboard pattern.
+    # You can generate and print one from many websites online.
+    # Example: https://markhedleyjones.com/projects/calibration-checkerboard-collection
+    calibrate_camera()

@@ -59,7 +59,7 @@ homography_matrix_path: "homography_matrix.yaml"
   
 # --- Input Source ---
 # Use '0' for webcam, or provide a path to a video file e.g., '/path/to/video.mp4'
-input_source: "rtsp://192.168.1.228:554/avstream/channel=1/stream=0.sdp"
+input_source: "rtsp://192.168.1.234:554/avstream/channel=1/stream=0.sdp"
 
 # --- MQTT Broker Settings ---
 mqtt:
