@@ -9,6 +9,11 @@ import json
 import time
 import paho.mqtt.client as mqtt
 import os
+import sys
+
+# Add the parent src directory to the path to import projection_utils
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+from projection_utils import ProjectionSystem
 
 # --- HELPER FUNCTION DEFINITIONS ---
 
@@ -92,8 +97,20 @@ def is_image_file(filename):
     """Checks if a filename has a common image extension."""
     return str(filename).lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff'))
 
-def transform_pixel_to_world(pixel_coords, homography_matrix):
-    """Transforms a single (x, y) pixel coordinate to world coordinates."""
+def transform_pixel_to_world(pixel_coords, homography_matrix=None, projection_system=None):
+    """Transforms a single (x, y) pixel coordinate to world coordinates using either homography or 3D projection."""
+    # Use new 3D projection system if available
+    if projection_system is not None and projection_system.is_calibrated():
+        world_point = projection_system.project_2d_to_3d(pixel_coords)
+        if world_point is not None:
+            return {
+                "x": float(world_point[0]),
+                "y": float(world_point[1]),
+                "z": float(world_point[2])
+            }
+        return None
+    
+    # Fall back to homography method
     if homography_matrix is None:
         return None
 
@@ -107,7 +124,7 @@ def transform_pixel_to_world(pixel_coords, homography_matrix):
         "y": float(world_point[0][0][1])
     }
 
-def process_detections(results, mqtt_client, config, last_detection_times, detection_topic, homography_matrix=None):
+def process_detections(results, mqtt_client, config, last_detection_times, detection_topic, homography_matrix=None, projection_system=None):
     """
     Processes detection results, handles cooldown logic, and publishes to MQTT.
     Returns the annotated frame for display.
@@ -116,13 +133,16 @@ def process_detections(results, mqtt_client, config, last_detection_times, detec
     
     if not mqtt_client or not detection_topic:
         # Still return the annotated frame even if MQTT is off
-        if homography_matrix is not None:
-            # If we have the matrix, we can still annotate the world coordinates
+        if homography_matrix is not None or projection_system is not None:
+            # If we have coordinate transformation capability, annotate with world coordinates
             for box in results.boxes:
                 x_center, y_center = int((box.xyxy[0][0] + box.xyxy[0][2]) / 2), int(box.xyxy[0][3]) # Bottom center
-                world_coords = transform_pixel_to_world((x_center, y_center), homography_matrix)
+                world_coords = transform_pixel_to_world((x_center, y_center), homography_matrix, projection_system)
                 if world_coords:
-                    label = f"({world_coords['x']:.2f}, {world_coords['y']:.2f})in"
+                    if 'z' in world_coords:  # 3D coordinates
+                        label = f"({world_coords['x']:.2f}, {world_coords['y']:.2f}, {world_coords['z']:.2f})m"
+                    else:  # 2D coordinates
+                        label = f"({world_coords['x']:.2f}, {world_coords['y']:.2f})in"
                     cv2.putText(frame, label, (x_center, y_center + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         return frame
 
@@ -147,16 +167,19 @@ def process_detections(results, mqtt_client, config, last_detection_times, detec
                 'source': config.get('input_source', 'unknown')
             }
 
-            # If homography matrix is available, add world coordinates
-            if homography_matrix is not None:
+            # Add world coordinates if coordinate transformation is available
+            if homography_matrix is not None or projection_system is not None:
                 # Use the bottom-center of the bounding box as the object's location
                 x_center = (boxes.xyxy[i][0].item() + boxes.xyxy[i][2].item()) / 2
                 y_center = boxes.xyxy[i][3].item() # Bottom edge
-                world_coords = transform_pixel_to_world((x_center, y_center), homography_matrix)
+                world_coords = transform_pixel_to_world((x_center, y_center), homography_matrix, projection_system)
                 if world_coords:
                     detection_data['world_coordinates'] = world_coords
                     # Also annotate the frame with these coordinates
-                    label = f"({world_coords['x']:.2f}, {world_coords['y']:.2f})in"
+                    if 'z' in world_coords:  # 3D coordinates
+                        label = f"({world_coords['x']:.2f}, {world_coords['y']:.2f}, {world_coords['z']:.2f})m"
+                    else:  # 2D coordinates
+                        label = f"({world_coords['x']:.2f}, {world_coords['y']:.2f})in"
                     cv2.putText(frame, label, (int(x_center), int(y_center) + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
             # Publish to MQTT and update last detection time
@@ -165,28 +188,28 @@ def process_detections(results, mqtt_client, config, last_detection_times, detec
             
     return frame
 
-def process_video_stream(model, source, conf, mqtt_client, config, detection_topic, homography_matrix=None):
+def process_video_stream(model, source, conf, mqtt_client, config, detection_topic, homography_matrix=None, projection_system=None):
     """Handles processing of a live camera feed or a video file."""
     last_detection_times = {}
     results_stream = model.predict(source=source, conf=conf, stream=True, verbose=False)
     
     for results in results_stream:
-        # Pass the homography matrix to the processing function
-        annotated_frame = process_detections(results, mqtt_client, config, last_detection_times, detection_topic, homography_matrix)
+        # Pass both homography matrix and projection system to the processing function
+        annotated_frame = process_detections(results, mqtt_client, config, last_detection_times, detection_topic, homography_matrix, projection_system)
         cv2.imshow("SCOPE Detector", annotated_frame)
         
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-def process_single_image(model, source, conf, mqtt_client, config, detection_topic, homography_matrix=None):
+def process_single_image(model, source, conf, mqtt_client, config, detection_topic, homography_matrix=None, projection_system=None):
     """Handles processing of a single static image."""
     last_detection_times = {}
     results = model.predict(source=source, conf=conf, verbose=False)
     
     result = results[0]
     
-    # Pass the homography matrix to the processing function
-    annotated_frame = process_detections(result, mqtt_client, config, last_detection_times, detection_topic, homography_matrix)
+    # Pass both homography matrix and projection system to the processing function
+    annotated_frame = process_detections(result, mqtt_client, config, last_detection_times, detection_topic, homography_matrix, projection_system)
     cv2.imshow("SCOPE Detector", annotated_frame)
 
     print("INFO: Detection complete on image. Press any key to exit.")
@@ -206,7 +229,21 @@ def main():
     print(f"INFO: Processing source: {input_source}")
     print(f"INFO: Using confidence threshold: {args.conf}")
 
-    # --- Homography Matrix Loading ---
+    # --- Coordinate Transformation System Loading ---
+    # Try to load the new 3D projection system first
+    projection_system = None
+    try:
+        projection_system = ProjectionSystem()
+        if projection_system.is_calibrated():
+            print("INFO: 3D projection system loaded successfully")
+        else:
+            print("WARNING: 3D projection system not fully calibrated, falling back to homography")
+            projection_system = None
+    except Exception as e:
+        print(f"WARNING: Could not load 3D projection system: {e}")
+        projection_system = None
+    
+    # Load homography matrix as fallback
     homography_matrix = load_homography_matrix(config)
 
     # --- MQTT Setup ---
@@ -227,10 +264,10 @@ def main():
 
     try:
         if is_image_file(input_source):
-            process_single_image(model, input_source, args.conf, mqtt_client, config, detection_topic, homography_matrix)
+            process_single_image(model, input_source, args.conf, mqtt_client, config, detection_topic, homography_matrix, projection_system)
         else:
             source_for_stream = int(input_source) if str(input_source).isdigit() else input_source
-            process_video_stream(model, source_for_stream, args.conf, mqtt_client, config, detection_topic, homography_matrix)
+            process_video_stream(model, source_for_stream, args.conf, mqtt_client, config, detection_topic, homography_matrix, projection_system)
 
     except Exception as e:
         print(f"FATAL: An unexpected error occurred during detection: {e}")

@@ -6,10 +6,15 @@ import open3d as o3d
 import trimesh
 
 # --- File Paths ---
-CONFIG_FILE = "/Users/Arshad_1/Desktop/projects/custom_cv_new/mart_building_cv/configs/main_config.yaml"
-INTRINSICS_FILE = "/Users/Arshad_1/Desktop/projects/custom_cv_new/mart_building_cv/configs/camera_intrinsics.yaml"
-LIDAR_SCAN_FILE = "/Users/Arshad_1/Desktop/projects/custom_cv_new/8_6_2025.glb" # Path to your GLB/GLTF file
-OUTPUT_FILE = "/Users/Arshad_1/Desktop/projects/custom_cv_new/mart_building_cv/configs/camera_extrinsics.yaml"
+# Get the script directory and build relative paths
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(script_dir))
+config_dir = os.path.join(project_root, "mart_building_cv", "configs")
+
+CONFIG_FILE = os.path.join(config_dir, "main_config.yaml")
+INTRINSICS_FILE = os.path.join(config_dir, "camera_intrinsics.yaml")
+LIDAR_SCAN_FILE = os.path.join(project_root, "8_6_2025.glb")
+OUTPUT_FILE = os.path.join(config_dir, "camera_extrinsics.yaml")
 
 # --- Global Variables ---
 points_2d = []

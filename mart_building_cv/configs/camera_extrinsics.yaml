@@ -1,0 +1,17 @@
+# Mock camera extrinsics for development
+# These values should be replaced with real calibration data
+rotation_vector:
+  rows: 3
+  cols: 1
+  data:
+  - [0.1]  # Small rotation around X-axis
+  - [0.05] # Small rotation around Y-axis
+  - [0.02] # Small rotation around Z-axis
+
+translation_vector:
+  rows: 3
+  cols: 1
+  data:
+  - [0.0]  # X position (meters)
+  - [0.0]  # Y position (meters)  
+  - [2.5]  # Z position (meters) - camera height

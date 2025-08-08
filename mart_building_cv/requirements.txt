@@ -5,3 +5,6 @@ opencv-python
 pyyaml
 paho-mqtt
 trimesh
+open3d
+scikit-learn
+numpy
