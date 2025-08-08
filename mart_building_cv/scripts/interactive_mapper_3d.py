@@ -49,6 +49,8 @@ if not backend_set:
 # Add the src directory to the path to import projection_utils
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 from projection_utils import ProjectionSystem
+from camera_visualizer import CameraVisualizer
+from performance_optimizer import PerformanceOptimizer
 
 class Marker:
     def __init__(self, id: int, pixel_coords: Tuple[float, float], world_coords: np.ndarray, color: Tuple[int, int, int] = (0, 255, 0)):
@@ -79,7 +81,8 @@ class Marker:
         return marker
 
 class InteractiveMapper3D:
-    def __init__(self, rtsp_url: str = None, config_dir: str = None, enable_3d: bool = True):
+    def __init__(self, rtsp_url: str = None, config_dir: str = None, enable_3d: bool = True, 
+                 show_camera: bool = True, enable_optimizations: bool = True):
         # Initialize projection system
         try:
             self.projection_system = ProjectionSystem(config_dir)
@@ -110,6 +113,28 @@ class InteractiveMapper3D:
         self.marker_lock = threading.Lock()
         self.next_marker_id = 1
         self.enable_3d = enable_3d
+        self.show_camera = show_camera
+        self.enable_optimizations = enable_optimizations
+        
+        # Initialize performance optimizer
+        self.optimizer = None
+        if self.enable_optimizations:
+            try:
+                self.optimizer = PerformanceOptimizer()
+                self.optimizer.apply_all_optimizations()
+                print("✓ Performance optimizations applied")
+            except Exception as e:
+                print(f"Warning: Performance optimizer failed: {e}")
+        
+        # Initialize camera visualizer
+        self.camera_visualizer = None
+        if self.show_camera:
+            try:
+                self.camera_visualizer = CameraVisualizer(config_dir)
+                print("✓ Camera visualizer initialized")
+            except Exception as e:
+                print(f"Warning: Camera visualizer failed to initialize: {e}")
+                self.show_camera = False
         
         # Video capture
         self.cap = None
@@ -158,24 +183,37 @@ class InteractiveMapper3D:
             self.enable_3d = False
     
     def initialize_camera(self) -> bool:
-        """Initialize the camera/video source."""
+        """Initialize the camera/video source with optimizations."""
         try:
             # Handle different source types
             if self.rtsp_url.isdigit():
                 source = int(self.rtsp_url)
+                # Standard VideoCapture for camera indices
+                self.cap = cv2.VideoCapture(source)
             else:
-                source = self.rtsp_url
-            
-            self.cap = cv2.VideoCapture(source)
+                # Use optimized RTSP capture if optimizer is available
+                if self.optimizer and 'rtsp://' in self.rtsp_url.lower():
+                    self.cap = self.optimizer.create_optimized_video_capture(self.rtsp_url)
+                else:
+                    self.cap = cv2.VideoCapture(self.rtsp_url)
             
             if not self.cap.isOpened():
-                print(f"Error: Could not open video source: {source}")
+                print(f"Error: Could not open video source: {self.rtsp_url}")
                 return False
             
-            # Set some properties for better performance
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            # Apply additional optimizations if available
+            if not self.optimizer:
+                # Fallback optimizations
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             
-            print(f"✓ Video source opened successfully: {source}")
+            # Get video properties for information
+            width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = self.cap.get(cv2.CAP_PROP_FPS)
+            
+            print(f"✓ Video source opened successfully: {self.rtsp_url}")
+            print(f"  Resolution: {width}x{height}")
+            print(f"  FPS: {fps:.1f}" if fps > 0 else "  FPS: Unknown")
             return True
             
         except Exception as e:
@@ -245,7 +283,16 @@ class InteractiveMapper3D:
             colors = self.downsampled_pc[:, 2]  # Use Z coordinate for coloring
             
             self.ax.scatter(self.downsampled_pc[:, 0], self.downsampled_pc[:, 1], self.downsampled_pc[:, 2], 
-                           c=colors, s=2.0, alpha=0.8, cmap='viridis', label='LiDAR Scan')
+                           c=colors, s=2.0, alpha=0.6, cmap='viridis', label='LiDAR Scan')
+            
+            # Add camera visualization
+            if self.show_camera and self.camera_visualizer:
+                try:
+                    self.camera_visualizer.add_camera_to_plot(self.ax, show_frustum=True, show_body=True, 
+                                                             show_direction=True, alpha=0.2)
+                    print("✓ Camera visualization added to 3D plot")
+                except Exception as e:
+                    print(f"Warning: Could not add camera visualization: {e}")
             
             print(f"✓ Visualizing {len(self.downsampled_pc)} points (downsampled from {len(self.point_cloud)})")
             
@@ -290,27 +337,53 @@ class InteractiveMapper3D:
             print(f"Error saving 3D plot: {e}")
     
     def update_3d_plot(self):
-        """Update the 3D plot with current markers."""
+        """Update the 3D plot with current markers and camera visualization."""
         if not self.enable_3d or self.ax is None:
             return
             
         try:
-            # Clear previous markers (keep point cloud)
-            # Find and remove marker artists
+            # Clear previous markers and camera visualization (keep point cloud)
+            # Find and remove marker artists and camera visualization
             artists_to_remove = []
             for artist in self.ax.collections:
-                if hasattr(artist, '_3d_marker') or artist.get_label().startswith('Marker'):
+                if (hasattr(artist, '_3d_marker') or 
+                    artist.get_label().startswith('Marker') or
+                    artist.get_label().startswith('Camera')):
                     artists_to_remove.append(artist)
             for artist in artists_to_remove:
                 artist.remove()
             
-            # Clear text labels
+            # Clear text labels and camera-related elements
             texts_to_remove = []
             for text in self.ax.texts:
-                if hasattr(text, '_3d_marker'):
+                if hasattr(text, '_3d_marker') or hasattr(text, '_camera_viz'):
                     texts_to_remove.append(text)
             for text in texts_to_remove:
                 text.remove()
+            
+            # Remove camera-related line plots
+            lines_to_remove = []
+            for line in self.ax.lines:
+                if hasattr(line, '_camera_viz'):
+                    lines_to_remove.append(line)
+            for line in lines_to_remove:
+                line.remove()
+            
+            # Add camera visualization if enabled
+            if self.show_camera and self.camera_visualizer:
+                try:
+                    # Temporarily store current alpha for better performance
+                    temp_camera_viz = CameraVisualizer(self.camera_visualizer.config_dir)
+                    temp_camera_viz.add_camera_to_plot(self.ax, show_frustum=True, show_body=True, 
+                                                     show_direction=True, alpha=0.2)
+                    # Mark camera elements for easy removal
+                    for artist in self.ax.collections[-3:]:
+                        if not hasattr(artist, '_3d_marker'):
+                            artist._camera_viz = True
+                    for line in self.ax.lines[-1:]:
+                        line._camera_viz = True
+                except Exception as e:
+                    print(f"Warning: Could not update camera visualization: {e}")
             
             # Add current markers
             with self.marker_lock:
@@ -397,6 +470,10 @@ class InteractiveMapper3D:
         print("  • Press 'l' to load markers from file") 
         print("  • Press 'i' to show calibration info")
         print("  • Press 'v' to show validation statistics")
+        print("  • Press 'k' to show camera position info")
+        print("  • Press 't' to toggle camera visualization")
+        print("  • Press 'd' to measure distance between last two markers")
+        print("  • Press 'o' to show performance/system info")
         print("  • Press 'h' to show this help")
         print("  • Press 'q' to quit")
         print("="*60)
@@ -413,6 +490,10 @@ class InteractiveMapper3D:
         
         if self.enable_3d:
             print("✓ 3D visualization enabled")
+            if self.show_camera and self.camera_visualizer:
+                print("✓ Camera visualization enabled")
+            else:
+                print("⚠️  Camera visualization disabled")
         else:
             print("⚠️  3D visualization disabled")
         print()
@@ -526,6 +607,62 @@ class InteractiveMapper3D:
             print(f"  M{marker.id:2d}: Pixel({pixel[0]:4.0f},{pixel[1]:4.0f}) → World({coords[0]:6.3f},{coords[1]:6.3f},{coords[2]:6.3f})")
         print()
     
+    def show_camera_info(self):
+        """Display detailed camera position and orientation information."""
+        if not self.show_camera or not self.camera_visualizer:
+            print("Camera visualization not available")
+            return
+            
+        self.camera_visualizer.print_camera_info()
+    
+    def toggle_camera_visualization(self):
+        """Toggle camera visualization on/off."""
+        if not self.enable_3d:
+            print("3D visualization is disabled")
+            return
+            
+        if not self.camera_visualizer:
+            print("Camera visualizer not initialized")
+            return
+            
+        self.show_camera = not self.show_camera
+        self.plot_update_queue.put('update')  # Update 3D plot
+        print(f"Camera visualization: {'ON' if self.show_camera else 'OFF'}")
+    
+    def measure_distance_between_markers(self):
+        """Measure distance between the last two markers placed."""
+        with self.marker_lock:
+            if len(self.markers) < 2:
+                print("Need at least 2 markers to measure distance")
+                return
+            
+            marker1 = self.markers[-2]  # Second to last
+            marker2 = self.markers[-1]  # Last
+            
+            # Calculate 3D distance
+            distance_3d = np.linalg.norm(marker2.world_coords - marker1.world_coords)
+            
+            # Calculate 2D pixel distance 
+            pixel_dist = np.sqrt((marker2.pixel_coords[0] - marker1.pixel_coords[0])**2 + 
+                               (marker2.pixel_coords[1] - marker1.pixel_coords[1])**2)
+            
+            print(f"\n{'='*50}")
+            print("DISTANCE MEASUREMENT")
+            print(f"{'='*50}")
+            print(f"Between Marker {marker1.id} and Marker {marker2.id}:")
+            print(f"  3D World Distance: {distance_3d:.3f} meters")
+            print(f"  2D Pixel Distance: {pixel_dist:.1f} pixels")
+            print(f"  → Scale: {distance_3d/pixel_dist*1000:.2f} mm per pixel")
+            print(f"{'='*50}\n")
+    
+    def show_performance_info(self):
+        """Display performance and system information."""
+        if self.optimizer:
+            self.optimizer.print_system_summary()
+        else:
+            print("\n⚠️  Performance optimizer not initialized")
+            print("Use --enable-optimizations flag to enable performance monitoring")
+    
     def run(self):
         """Run the interactive mapper application."""
         if not self.initialize_camera():
@@ -593,6 +730,14 @@ class InteractiveMapper3D:
                     self.show_calibration_info()
                 elif key == ord('v'):
                     self.show_validation_stats()
+                elif key == ord('k'):
+                    self.show_camera_info()
+                elif key == ord('t'):
+                    self.toggle_camera_visualization()
+                elif key == ord('d'):
+                    self.measure_distance_between_markers()
+                elif key == ord('o'):
+                    self.show_performance_info()
                 elif key == ord('h'):
                     self.print_instructions()
         
@@ -623,9 +768,13 @@ def main():
     parser.add_argument('--source', type=str, help='Video source (RTSP URL, camera index, or video file)')
     parser.add_argument('--config-dir', type=str, help='Directory containing calibration config files')
     parser.add_argument('--no-3d', action='store_true', help='Disable 3D visualization')
+    parser.add_argument('--no-camera', action='store_true', help='Disable camera position visualization')
+    parser.add_argument('--no-optimizations', action='store_true', help='Disable performance optimizations')
     args = parser.parse_args()
     
-    mapper = InteractiveMapper3D(rtsp_url=args.source, config_dir=args.config_dir, enable_3d=not args.no_3d)
+    mapper = InteractiveMapper3D(rtsp_url=args.source, config_dir=args.config_dir, 
+                                enable_3d=not args.no_3d, show_camera=not args.no_camera,
+                                enable_optimizations=not args.no_optimizations)
     mapper.run()
 
 if __name__ == "__main__":
