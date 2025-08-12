@@ -73,7 +73,7 @@ if __name__ == "__main__":
     # Please verify these paths are correct.
 
     # 1. The path to your GLB file from the previous step.
-    lidar_scan_path = "/Users/Arshad_1/Desktop/projects/custom_cv_new/8_6_2025.glb"
+    lidar_scan_path = "/Users/Arshad_1/Desktop/projects/custom_cv_new/8_11_2025.glb"
 
     # 2. The desired output path for the new config file.
     output_config_path = "/Users/Arshad_1/Desktop/projects/custom_cv_new/mart_building_cv/configs/floor_plane.yaml"

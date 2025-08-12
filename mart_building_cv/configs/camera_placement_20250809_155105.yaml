@@ -1,0 +1,14 @@
+camera_placement:
+  field_of_view:
+    horizontal_degrees: 64.0
+    vertical_degrees: 31.0
+  position:
+  - 0.06102855992561715
+  - 0.984807753012208
+  - 3.04678852115725
+  rotation_euler_degrees:
+  - 155.0
+  - 0.0
+  - 0.0
+notes: Manual camera placement for 2D-3D mapping calibration
+timestamp: '2025-08-09T15:51:05.041128'
