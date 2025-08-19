@@ -14,3 +14,6 @@ datasets/coco128/.DS_Store
 datasets/coco128/labels/.DS_Store
 datasets/coco128/labels/train2017.cache
 datasets/coco128/labels/train2017/.DS_Store
+camera_mapping/__pycache__/camera_calibrator.cpython-313.pyc
+camera_mapping/__pycache__/robot_interface.cpython-313.pyc
+camera_mapping/__pycache__/yolo_integration.cpython-313.pyc
