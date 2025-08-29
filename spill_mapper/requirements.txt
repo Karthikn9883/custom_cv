@@ -1,0 +1,12 @@
+spill_mapper/
+├── camera_registry.yaml              # (optional) RTSP + transform paths per camera
+├── requirements.txt
+├── README.md
+├── create_reference_points.py        # click known floor points -> saves reference_points.yaml
+├── calculate_room_transform.py       # builds homography -> room_transform.yaml
+├── detection_adapter.py              # thin shim to your spill model (or YOLO fallback)
+├── spill_event_bridge.py             # runs detector + mapping -> JSON events
+└── rooms/                            # auto-created store
+    └── <ROOM_ID>/<CAMERA_ID>/
+        ├── reference_points.yaml
+        └── room_transform.yaml

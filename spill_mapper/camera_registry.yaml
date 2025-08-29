@@ -1,0 +1,5 @@
+cameras:
+  cctv-207:
+    room: "lab-east"
+    rtsp: "rtsp://admin:123456@192.168.12.207:80/ch1_0.264"
+    transform: "spill_mapper/rooms/lab-east/cctv-207/room_transform.yaml"

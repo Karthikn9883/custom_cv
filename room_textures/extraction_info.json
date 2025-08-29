@@ -1,0 +1,22 @@
+{
+  "glb_file": "/home/scopee/Desktop/projects/custom_cv/8_12_2025.glb",
+  "images_found": 1,
+  "images_extracted": 1,
+  "images": [
+    {
+      "filename": "7b7a8b5a24abf06bdc765afcb8286e3a.jpg",
+      "size": [
+        8192,
+        4256
+      ],
+      "mode": "RGB",
+      "mime_type": "image/jpeg"
+    }
+  ],
+  "gltf_info": {
+    "version": 2,
+    "materials": 1,
+    "textures": 1,
+    "bufferViews": 4
+  }
+}
